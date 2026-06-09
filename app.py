@@ -71,6 +71,11 @@ def train():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/about')
+def about_page():
+    model_info = get_model_stats()
+    return render_template('about.html', model_info=model_info)
+
 @app.route('/predict')
 def predict_page():
     today = datetime.now().strftime('%Y-%m-%d')

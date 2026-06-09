@@ -27,6 +27,7 @@ def train_model(data_df, force=False):
         'solar_index', 'wind_index', 'renewable_index',
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
+        'days_since_epoch',
     ]
     available = [c for c in feature_cols if c in data_df.columns]
     df = data_df.dropna(subset=['price'] + available).copy()
@@ -105,6 +106,7 @@ def predict_hourly(model, features_df):
         'solar_index', 'wind_index', 'renewable_index',
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
+        'days_since_epoch',
     ]
     available = [c for c in feature_cols if c in features_df.columns]
     missing = [c for c in feature_cols if c not in features_df.columns]

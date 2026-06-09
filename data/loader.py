@@ -136,6 +136,11 @@ def generate_synthetic_genmix_for_range(start_year, end_year):
             ts += timedelta(hours=1)
     return pd.DataFrame(rows)
 
+DATA_EPOCH = pd.Timestamp('2023-01-01')
+
+def _days_since_epoch(dt_series):
+    return (dt_series - DATA_EPOCH).dt.days.astype(int)
+
 def build_features(df):
     df = df.copy()
     dt = pd.to_datetime(df['datetime'])
@@ -149,6 +154,7 @@ def build_features(df):
     df['cos_hour'] = np.cos(2 * np.pi * df['hour'] / 24)
     df['sin_month'] = np.sin(2 * np.pi * df['month'] / 12)
     df['cos_month'] = np.cos(2 * np.pi * df['month'] / 12)
+    df['days_since_epoch'] = _days_since_epoch(dt)
     for col in ['solar_index', 'wind_index', 'renewable_index',
                 'nuclear_share', 'thermal_share', 'hydro_share',
                 'solar_share', 'wind_share', 'res_share',

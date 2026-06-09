@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Про проект - Energy Predictor UA{% endblock %}
+{% block content %}
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>⚡ Про проект</h2>
+            <p>Веб-програма для прогнозування ціни електроенергії в Україні для юридичних осіб. Система використовує машинне навчання (XGBoost) для прогнозу погодинних цін на ринку "на добу наперед" (РДН) та лінійне програмування (PuLP) для оптимізації заряду/розряду промислових батарей.</p>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>📊 Дані та джерела</h2>
+            <table>
+                <thead>
+                    <tr><th>Джерело</th><th>Дані</th><th>Період (реальні)</th><th>Обсяг</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="https://www.oree.com.ua" target="_blank" style="color: var(--info)">OPEE (ОРЭЭ)</a></td>
+                        <td>Погодинні ціни РДН (на добу наперед)</td>
+                        <td>2023-01-01 – 2026-05-31</td>
+                        <td><strong>16 125</strong> записів</td>
+                    </tr>
+                    <tr>
+                        <td><a href="https://github.com/aranaur/ukrenergo" target="_blank" style="color: var(--info)">Ukrenergo (Aranaur)</a></td>
+                        <td>Погодинна генерація ОЕС по типах (АЕС, ТЕС, ГЕС, СЕС, ВЕС)</td>
+                        <td>2014 – 2021 (реальна), 2022+ (розрахункова)</td>
+                        <td><strong>68 232</strong> записів</td>
+                    </tr>
+                    <tr>
+                        <td><a href="https://openweathermap.org" target="_blank" style="color: var(--info)">OpenWeather API</a></td>
+                        <td>Прогноз погоди для розрахунку температури, хмарності, вітру</td>
+                        <td>Поточний + 48 год</td>
+                        <td>Потрібен ключ API</td>
+                    </tr>
+                    <tr>
+                        <td><a href="https://transparency.entsoe.eu" target="_blank" style="color: var(--info)">ENTSO-E Transparency</a></td>
+                        <td>Генерація ОЕС по типах (офіційна панель)</td>
+                        <td>—</td>
+                        <td>API повертає "No matching data" для України</td>
+                    </tr>
+                    <tr>
+                        <td>Розрахункові</td>
+                        <td>Температура, хмарність, вітер, сонячна радіація для 5 зон ВДЕ</td>
+                        <td>Весь період цін OREE (2023-2026)</td>
+                        <td>Синтезовані на основі сезонних профілів</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>🧠 Методи</h2>
+            <div class="method-grid">
+                <div class="method-card">
+                    <h3>🔮 XGBoost (прогноз цін)</h3>
+                    <p>Градієнтний бустинг на 300 деревах рішень. 22 ознаки включають:</p>
+                    <ul>
+                        <li>Час доби (hour, sin_hour, cos_hour)</li>
+                        <li>День тижня, місяць, свята, вихідні</li>
+                        <li>Температура повітря</li>
+                        <li>Індекси ВДЕ (solar_index, wind_index, renewable_index)</li>
+                        <li>Структура генерації ОЕС (частки АЕС, ТЕС, ГЕС, СЕС, ВЕС)</li>
+                        <li>Тренд: days_since_epoch (днів від 2023-01-01)</li>
+                    </ul>
+                </div>
+                <div class="method-card">
+                    <h3>⚙️ PuLP (оптимізація батареї)</h3>
+                    <p>Лінійне програмування для максимізації прибутку від заряду/розряду промислової батареї. Враховано:</p>
+                    <ul>
+                        <li>Обмеження потужності (1 МВт) та ємності (4 МВт·год)</li>
+                        <li>ККД заряду/розряду (92%)</li>
+                        <li>Тарифи на передачу (150 грн) та диспетчеризацію (50 грн)</li>
+                        <li>Ліміт циклів (1 на добу)</li>
+                        <li>Ручні фактори (ризик прильотів, відключення АЕС)</li>
+                    </ul>
+                </div>
+                <div class="method-card">
+                    <h3>🌤 Індекс ВДЕ (5 зон)</h3>
+                    <p>Моніторинг сонячної та вітрової генерації в 5 зонах України:</p>
+                    <table>
+                        <thead><tr><th>Зона</th><th>Координати</th><th>Фактор СЕС</th><th>Фактор ВЕС</th></tr></thead>
+                        <tbody>
+                            <tr><td>Південь (Миколаїв)</td><td>47.0, 32.0</td><td>1.3</td><td>1.2</td></tr>
+                            <tr><td>Запоріжжя</td><td>47.8, 35.0</td><td>1.2</td><td>0.8</td></tr>
+                            <tr><td>Дніпро</td><td>48.5, 35.0</td><td>1.1</td><td>0.9</td></tr>
+                            <tr><td>Одеса</td><td>46.5, 30.5</td><td>1.3</td><td>1.0</td></tr>
+                            <tr><td>Карпати</td><td>49.0, 24.0</td><td>0.7</td><td>1.4</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="method-card">
+                    <h3>🔁 Спред ВДР-РДН</h3>
+                    <p>Внутрішньодобовий ринок (ВДР) дозволяє коригувати позиції після закриття РДН (до 12:00). Заявки подаються з 15:00 D-1 до закриття воріт (за 60 хв до реального часу).</p>
+                    <p>Для батареї: купівля на ВДР дешевше + продаж на РДН дорожче = додатковий арбітраж. Спред ВДР-РДН — індикатор дефіциту/профіциту.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>📈 Модель прогнозування</h2>
+            <div class="stats-grid">
+                <div class="stat">
+                    <span class="stat-label">Статус</span>
+                    <span class="stat-value">{{ 'Навчена' if model_info.status == 'trained' else 'Не навчена' }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">R²</span>
+                    <span class="stat-value">{{ model_info.r2 or '—' }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">MAE</span>
+                    <span class="stat-value">{{ model_info.mae or '—' }} грн</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">RMSE</span>
+                    <span class="stat-value">{{ model_info.rmse or '—' }} грн</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Тренувальних</span>
+                    <span class="stat-value">{{ model_info.n_train or '—' }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Тестових</span>
+                    <span class="stat-value">{{ model_info.n_test or '—' }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Ознак</span>
+                    <span class="stat-value">22</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Алгоритм</span>
+                    <span class="stat-value" style="font-size: 0.9rem">XGBoost Regressor</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>🗂 Структура проекту</h2>
+            <div class="code-block">
+                <pre>energy_prediction/
+├── app.py                  # Flask сервер + REST API
+├── model/
+│   ├── train.py            # Навчання XGBoost (300 дерев, 22 ознаки)
+│   ├── predict.py          # Прогноз на добу + feature engineering
+│   └── model.pkl           # Навчена модель
+├── data/
+│   ├── loader.py           # Завантаження + кешування даних
+│   ├── oree_prices.feather # Скраплені ціни OREE
+│   └── cache.feather       # Кеш об'єднаного датасету
+├── collectors/
+│   ├── oree.py             # Парсинг OREE (РДН + ВДР)
+│   ├── weather.py          # OpenWeather API + синтетичний прогноз
+│   ├── renewable_index.py  # 5 зон ВДЕ + індекси генерації
+│   ├── generation_mix.py   # Генерація ОЕС (ENTSO-E / Ukrenergo)
+│   └── ukrenergo.py        # Ukrenergo історичні дані (2014-2021)
+├── optimizer/
+│   └── scheduler.py        # PuLP лінійне програмування (батарея)
+├── templates/              # Jinja2 шаблони
+├── static/style.css        # CSS
+├── requirements.txt
+├── Dockerfile
+└── docker-compose.yml</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>📋 Типові цінові патерни</h2>
+            <div class="info-box">
+                <strong>Коли очікувати ціну 10 грн?</strong>
+                <p>Ціна 10 грн/МВт·год з'являється при профіциті генерації в ОЕС України. Основні фактори:</p>
+                <ul>
+                    <li><strong>Весняно-літній період:</strong> надлишок сонячної генерації вдень</li>
+                    <li><strong>Вітряна погода:</strong> ВЕС дають надлишок вночі</li>
+                    <li><strong>Вихідні та свята:</strong> зниження промислового споживання</li>
+                    <li><strong>Відсутність атомних блоків в ремонті:</strong> базова генерація не знижується</li>
+                    <li><strong>Тепла погода:</strong> зниження споживання на опалення</li>
+                </ul>
+                <p>Типові години профіциту: <strong>10:00-15:00</strong> (максимум СЕС) та <strong>02:00-05:00</strong> (нічний мінімум споживання)</p>
+            </div>
+            <div class="info-box" style="margin-top: 0.75rem;">
+                <strong>Динаміка цін за роками</strong>
+                <p>Середня ціна на РДН має стійкий висхідний тренд:</p>
+                <ul>
+                    <li><strong>2023:</strong> 3 388 грн/МВт·год</li>
+                    <li><strong>2024:</strong> 4 402 грн/МВт·год</li>
+                    <li><strong>2025:</strong> 5 147 грн/МВт·год</li>
+                    <li><strong>2026:</strong> 6 799 грн/МВт·год</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card" style="text-align: center;">
+            <h2>🔗 Посилання</h2>
+            <p>
+                <a href="https://www.oree.com.ua" target="_blank" style="color: var(--info)">OPEE (ОРЭЭ)</a> •
+                <a href="https://openweathermap.org" target="_blank" style="color: var(--info)">OpenWeather</a> •
+                <a href="https://transparency.entsoe.eu" target="_blank" style="color: var(--info)">ENTSO-E</a> •
+                <a href="https://github.com/aranaur/ukrenergo" target="_blank" style="color: var(--info)">Ukrenergo (Aranaur)</a> •
+                <a href="https://github.com/Olegkg2018/energy-prediction-ua" target="_blank" style="color: var(--info)">GitHub</a>
+            </p>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
