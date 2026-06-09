@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import os
 import json
 from xml.etree import ElementTree as ET
+from collectors.ukrenergo import get_ukrenergo_genmix as get_ukrenergo_data
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 CACHE_FILE = os.path.join(CACHE_DIR, 'generation_mix.feather')
@@ -214,6 +215,14 @@ def get_generation_mix(days=7):
         pivoted = pivoted[['datetime', 'date', 'hour'] + type_cols + ['total_gen_mw', 'import_balance_mw']]
         save_cache(pivoted)
         return to_aggregated(pivoted)
+    try:
+        ukr = get_ukrenergo_data()
+        if ukr is not None and len(ukr) > 0:
+            ukr_latest = pd.to_datetime(ukr['datetime']).max()
+            if ukr_latest > datetime.now() - timedelta(days=365):
+                return to_aggregated(ukr)
+    except Exception:
+        pass
     sample = generate_sample_mix(days)
     save_cache(sample)
     return to_aggregated(sample)
@@ -224,6 +233,17 @@ def get_generation_stats(days=7):
         return {}
     latest = df.sort_values('datetime').tail(1).iloc[0]
     recent_24h = df.tail(24)
+    if 'source' in df.columns:
+        src_val = str(df['source'].iloc[0])
+        if 'ukrenergo' in src_val:
+            source_label = 'ukrenergo'
+        elif 'entsoe' in src_val:
+            source_label = 'entsoe'
+        else:
+            source_label = 'sample'
+    else:
+        entsoe_key = get_entsoe_api_key()
+        source_label = 'entsoe' if entsoe_key else 'sample'
     stats = {
         'updated': datetime.now().isoformat(),
         'latest': {
@@ -254,7 +274,7 @@ def get_generation_stats(days=7):
             'solar_share': round(float(recent_24h['solar_share'].mean() * 100), 1),
             'wind_share': round(float(recent_24h['wind_share'].mean() * 100), 1),
         },
-        'source': 'entsoe' if get_entsoe_api_key() else 'sample',
+        'source': source_label,
     }
     return stats
 

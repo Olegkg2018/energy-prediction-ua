@@ -183,13 +183,24 @@ def get_combined_dataset():
     merged = pd.merge(prices, weather, on=['datetime', 'date', 'hour'], how='left')
     merged['temperature'] = merged['temperature'].interpolate(limit_direction='both')
 
-    renewable = generate_synthetic_renewable_for_range(min_year, max_year)
+    oree_years = set(pd.to_datetime(prices['datetime']).dt.year)
+    renewable = generate_synthetic_renewable_for_range(min(oree_years), max(oree_years))
     merged = pd.merge(merged, renewable[['datetime', 'solar_index', 'wind_index', 'renewable_index']],
                       on='datetime', how='left')
     for c in ['solar_index', 'wind_index', 'renewable_index']:
         merged[c] = merged[c].fillna(0)
 
-    genmix = generate_synthetic_genmix_for_range(min_year, max_year)
+    try:
+        from collectors.ukrenergo import get_ukrenergo_genmix
+        real_genmix = get_ukrenergo_genmix()
+        if real_genmix is not None and len(real_genmix) > 0:
+            genmix = real_genmix[real_genmix['datetime'].isin(prices['datetime'])]
+            if len(genmix) == 0:
+                genmix = generate_synthetic_genmix_for_range(min(oree_years), max(oree_years))
+        else:
+            genmix = generate_synthetic_genmix_for_range(min(oree_years), max(oree_years))
+    except Exception:
+        genmix = generate_synthetic_genmix_for_range(min(oree_years), max(oree_years))
     merged = pd.merge(merged, genmix[['datetime', 'nuclear_share', 'thermal_share', 'hydro_share',
                                        'solar_share', 'wind_share', 'res_share', 'total_gen_mw']],
                       on='datetime', how='left')
