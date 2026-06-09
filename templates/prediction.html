@@ -1,0 +1,524 @@
+{% extends "base.html" %}
+{% block title %}Прогноз - Energy Predictor UA{% endblock %}
+{% block content %}
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Прогноз ціни на електроенергію</h2>
+            <div class="date-selector">
+                <label for="dateSelect">Оберіть дату:</label>
+                <input type="date" id="dateSelect" value="{{ tomorrow }}">
+                <button class="btn btn-primary" onclick="loadPrediction()">Отримати прогноз</button>
+                <button class="btn btn-secondary" onclick="loadOptimization()">Оптимізувати батарею</button>
+                <button class="btn btn-info" onclick="loadFactors()">Аналіз факторів</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Налаштування батареї</h2>
+            <div class="battery-config">
+                <div>
+                    <label>Потужність (МВт)</label>
+                    <input type="number" id="batteryPower" value="1" min="0.1" max="100" step="0.1">
+                </div>
+                <div>
+                    <label>Ємність (МВт·год)</label>
+                    <input type="number" id="batteryCapacity" value="4" min="0.1" max="1000" step="0.5">
+                </div>
+                <div>
+                    <label>Початковий заряд (%)</label>
+                    <input type="number" id="batterySoc" value="0" min="0" max="100" step="5">
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card">
+            <h2>Ручні фактори</h2>
+            <div class="manual-factors" id="manualFactorsForm">
+                <div>
+                    <label>
+                        <input type="checkbox" id="factorNuclear">
+                        Відключення АЕС / дефіцит атомної генерації
+                    </label>
+                </div>
+                <div>
+                    <label>Ризик прильотів: <span id="missileRiskLabel">0%</span></label>
+                    <input type="range" id="factorMissile" min="0" max="100" value="0"
+                           oninput="document.getElementById('missileRiskLabel').textContent = this.value + '%'">
+                </div>
+                <div style="margin-top: 0.5rem">
+                    <button class="btn btn-info" onclick="saveManualFactors()">Зберегти фактори</button>
+                    <span id="factorsSaveStatus"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Прогноз цін по годинах</h2>
+            <div id="price-chart" style="height: 450px;"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Таблиця прогнозу</h2>
+            <div class="table-container" id="prediction-table"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row" id="optimization-section" style="display:none">
+    <div class="col">
+        <div class="card">
+            <h2>Оптимізація батареї (PuLP Solver)</h2>
+            <div id="optimization-results"></div>
+            <div id="optimization-chart" style="height: 400px;"></div>
+            <div id="optimization-schedule-table" style="margin-top: 1rem"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row" id="factors-section" style="display:none">
+    <div class="col">
+        <div class="card">
+            <h2>Фактори впливу та аналіз</h2>
+            <div id="factors-detail"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Ціни РДН (на добу наперед) та ВДР (внутрішньодобовий)</h2>
+            <div class="info-box" style="margin-bottom: 1rem;">
+                <strong>ВДР — внутрішньодобовий ринок</strong>
+                <p>Дозволяє коригувати позиції після закриття РДН (до 12:00). Заявки подаються з 15:00 D-1 до «закриття воріт» (за 60 хв до реального часу). Ціни ВДР відрізняються від РДН, відображаючи поточний баланс ОЕС.</p>
+                <p><strong>Для батареї:</strong> купівля на ВДР дешевше + продаж на РДН дорожче = додатковий арбітраж. Спред ВДР-РДН — індикатор дефіциту/профіциту.</p>
+            </div>
+            <div id="oree-chart" style="height: 300px;"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadPrediction();
+    loadOreePrices();
+    loadManualFactors();
+});
+
+function getBatteryParams() {
+    return {
+        power: document.getElementById('batteryPower').value,
+        capacity: document.getElementById('batteryCapacity').value,
+        initial_soc: document.getElementById('batterySoc').value
+    };
+}
+
+function loadPrediction() {
+    const date = document.getElementById('dateSelect').value;
+    fetch(`/api/predict?date=${date}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                document.getElementById('price-chart').innerHTML = `<p class="error">${data.error}</p>`;
+                return;
+            }
+            renderPredictionChart(data.predictions, date);
+            renderPredictionTable(data.predictions);
+        });
+}
+
+function renderPredictionChart(predictions, date) {
+    const hours = predictions.map(p => p.hour);
+    const prices = predictions.map(p => p.price);
+    const temps = predictions.map(p => p.temperature);
+
+    const trace1 = {
+        x: hours, y: prices,
+        type: 'scatter', mode: 'lines+markers',
+        name: 'Ціна грн/МВт·год',
+        marker: { color: '#FF5722', size: 8 },
+        line: { color: '#FF5722', width: 2 },
+        yaxis: 'y'
+    };
+    const trace2 = {
+        x: hours, y: temps,
+        type: 'scatter', mode: 'lines+markers',
+        name: 'Температура °C',
+        marker: { color: '#2196F3', size: 6 },
+        line: { color: '#2196F3', width: 1, dash: 'dot' },
+        yaxis: 'y2'
+    };
+
+    const avgPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
+    const shape = {
+        type: 'line', x0: hours[0], y0: avgPrice,
+        x1: hours[hours.length-1], y1: avgPrice,
+        line: { color: 'gray', width: 1, dash: 'dash' }
+    };
+
+    Plotly.newPlot('price-chart', [trace1, trace2], {
+        title: `Прогноз цін на ${date} (сер. ${avgPrice.toFixed(0)} грн)`,
+        xaxis: { title: 'Година', dtick: 2 },
+        yaxis: { title: 'Ціна, грн/МВт·год', side: 'left' },
+        yaxis2: { title: 'Температура, °C', overlaying: 'y', side: 'right' },
+        shapes: [shape],
+        margin: { t: 40, r: 50, b: 40, l: 60 }
+    });
+}
+
+function renderPredictionTable(predictions) {
+    let html = `<table><thead><tr>
+        <th>Година</th><th>Ціна, грн</th><th>Темп, °C</th>
+        <th>Хмарність, %</th><th>Вітер, м/с</th><th>Сонц. рад., Вт/м²</th>
+    </tr></thead><tbody>`;
+    for (const p of predictions) {
+        const color = p.price < 200 ? '#28a745' : p.price > 2000 ? '#dc3545' : '';
+        html += `<tr>
+            <td>${p.hour}</td>
+            <td style="color:${color};font-weight:bold">${p.price}</td>
+            <td>${p.temperature || '-'}</td>
+            <td>${p.clouds || '-'}</td>
+            <td>${p.wind_speed || '-'}</td>
+            <td>${p.solar_radiation || '-'}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('prediction-table').innerHTML = html;
+}
+
+function loadOptimization() {
+    document.getElementById('optimization-section').style.display = 'block';
+    document.getElementById('factors-section').style.display = 'none';
+    const date = document.getElementById('dateSelect').value;
+    const bp = getBatteryParams();
+    const container = document.getElementById('optimization-results');
+    container.innerHTML = '<p>Розрахунок оптимізації...</p>';
+
+    fetch(`/api/optimize?date=${date}&capacity=${bp.capacity}&power=${bp.power}&initial_soc=${bp.initial_soc}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                container.innerHTML = `<p class="error">${data.error}</p>`;
+                return;
+            }
+            const opt = data.optimization;
+            const isRisky = opt.factors && opt.factors.missile_risk > 0;
+
+            container.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat">
+                        <span class="stat-label">Статус</span>
+                        <span class="stat-value">${opt.status}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Дохід</span>
+                        <span class="stat-value" style="color:var(--success)">${opt.total_revenue} грн</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Заряджено</span>
+                        <span class="stat-value">${opt.total_charge_mwh} МВт·год</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Розряджено</span>
+                        <span class="stat-value">${opt.total_discharge_mwh} МВт·год</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Циклів</span>
+                        <span class="stat-value">${opt.cycles_used}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Прибуток/МВт·год</span>
+                        <span class="stat-value">${opt.profit_per_mwh} грн</span>
+                    </div>
+                </div>
+                <div class="stats-grid" style="margin-top: 0.5rem">
+                    <div class="stat">
+                        <span class="stat-label">Батарея</span>
+                        <span class="stat-value">${opt.battery_power_mw} МВт / ${opt.battery_capacity_mwh} МВт·год</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Поч. заряд</span>
+                        <span class="stat-value">${opt.initial_soc_pct}%</span>
+                    </div>
+                    ${isRisky ? `<div class="stat" style="border-left: 3px solid var(--danger)">
+                        <span class="stat-label">Фактор ризику</span>
+                        <span class="stat-value" style="color:var(--danger)">Прильоти ${Math.round(opt.factors.missile_risk * 100)}%</span>
+                    </div>` : ''}
+                </div>
+            `;
+
+            renderOptimizationChart(opt);
+            renderOptimizationTable(opt.schedule);
+        });
+}
+
+function renderOptimizationChart(opt) {
+    const schedule = opt.schedule;
+    const hours = schedule.map(s => `${s.hour}:00`);
+    const prices = opt.prices || schedule.map(s => s.price_uah);
+    const chargeMw = schedule.map(s => s.charge_mw);
+    const dischargeMw = schedule.map(s => s.discharge_mw);
+
+    const steps = 25;
+    const socTimeline = [];
+    const stepsLabels = [];
+    const initialSoc = opt.initial_soc_pct !== undefined
+        ? (opt.initial_soc_pct > 1 ? opt.initial_soc_pct / 100 : opt.initial_soc_pct) * opt.battery_capacity_mwh
+        : schedule[0] && schedule[0].soc_mwh - schedule[0].charge_mw * 0.92 + schedule[0].discharge_mw / 0.92;
+
+    for (let t = 0; t <= 24; t++) {
+        if (t === 0) {
+            socTimeline.push(initialSoc);
+        } else {
+            const prev = schedule[t - 1];
+            const prevSoc = socTimeline[t - 1];
+            const socAfter = prevSoc + prev.charge_mw * 0.92 - prev.discharge_mw / 0.92;
+            socTimeline.push(Math.max(0, Math.min(opt.battery_capacity_mwh, socAfter)));
+        }
+        stepsLabels.push(`${t}:00`);
+    }
+
+    Plotly.newPlot('optimization-chart', [
+        {
+            x: hours, y: prices,
+            type: 'scatter', mode: 'lines+markers',
+            name: 'Ціна грн',
+            yaxis: 'y',
+            line: { color: '#FF5722' }
+        },
+        {
+            x: hours, y: chargeMw,
+            type: 'bar', name: 'Заряд (МВт)',
+            marker: { color: '#4CAF50' },
+            yaxis: 'y2'
+        },
+        {
+            x: hours, y: dischargeMw,
+            type: 'bar', name: 'Розряд (МВт)',
+            marker: { color: '#f44336' },
+            yaxis: 'y2'
+        },
+        {
+            x: stepsLabels, y: socTimeline,
+            type: 'scatter', mode: 'lines',
+            name: 'Рівень заряду (МВт·год)',
+            yaxis: 'y3',
+            line: { color: '#2196F3', width: 3, shape: 'vh' }
+        }
+    ], {
+        title: `Оптимізація: ${opt.battery_power_mw} МВт / ${opt.battery_capacity_mwh} МВт·год (поч. ${opt.initial_soc_pct}%)`,
+        xaxis: { title: 'Година' },
+        yaxis: { title: 'Ціна, грн', side: 'left' },
+        yaxis2: { title: 'Потужність, МВт', overlaying: 'y', side: 'right' },
+        yaxis3: { title: 'Заряд, МВт·год', side: 'right', position: 0.9 },
+        barmode: 'overlay',
+        margin: { t: 40, r: 60, b: 40, l: 60 }
+    });
+}
+
+function renderOptimizationTable(schedule) {
+    const capacity = schedule.length > 0
+        ? (schedule[0].soc_mwh / (schedule[0].soc_pct / 100) || 4) : 4;
+    function calcSocStart(idx) {
+        if (idx === 0) {
+            const s0 = schedule[0];
+            return s0.soc_mwh - s0.charge_mw * 0.92 + s0.discharge_mw / 0.92;
+        }
+        const prev = schedule[idx - 1];
+        return prev.soc_mwh;
+    }
+    let html = `<table><thead><tr>
+        <th>Година</th><th>Ціна грн</th>
+        <th>Дія</th><th>Заряд МВт</th><th>Розряд МВт</th><th>SoC поч. (МВт·год)</th><th>SoC кін. (МВт·год)</th>
+    </tr></thead><tbody>`;
+    for (let i = 0; i < schedule.length; i++) {
+        const s = schedule[i];
+        const socStart = calcSocStart(i);
+        const actionColor = s.action === 'charge' ? '#4CAF50' : s.action === 'discharge' ? '#f44336' : '#666';
+        const priceColor = s.price_uah < 200 ? '#4CAF50' : s.price_uah > 2000 ? '#f44336' : '';
+        const actionSym = s.action === 'charge' ? '⚡ ЗАРЯД' : s.action === 'discharge' ? '🔋 РОЗРЯД' : '—';
+        html += `<tr>
+            <td>${s.hour}:00</td>
+            <td style="color:${priceColor}">${s.price_uah}</td>
+            <td style="color:${actionColor};font-weight:bold">${actionSym}</td>
+            <td>${s.charge_mw}</td>
+            <td>${s.discharge_mw}</td>
+            <td>${socStart.toFixed(2)}</td>
+            <td>${s.soc_mwh}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('optimization-schedule-table').innerHTML = html;
+}
+
+function loadFactors() {
+    document.getElementById('factors-section').style.display = 'block';
+    document.getElementById('optimization-section').style.display = 'none';
+    const date = document.getElementById('dateSelect').value;
+    const container = document.getElementById('factors-detail');
+    container.innerHTML = '<p>Аналіз факторів...</p>';
+
+    fetch(`/api/factors?date=${date}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                container.innerHTML = `<p class="error">${data.error}</p>`;
+                return;
+            }
+            const f = data.factors;
+            let html = `
+                <div class="stats-grid">
+                    <div class="stat">
+                        <span class="stat-label">Середня ціна</span>
+                        <span class="stat-value">${f.avg_price} грн</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Мінімум</span>
+                        <span class="stat-value" style="color:var(--success)">${f.min_price.price} грн (${f.min_price.hour})</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Максимум</span>
+                        <span class="stat-value" style="color:var(--danger)">${f.max_price.price} грн (${f.max_price.hour})</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Волатильність</span>
+                        <span class="stat-value">${f.volatility} грн</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Годин профіциту</span>
+                        <span class="stat-value">${f.num_surplus_hours}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Рекомендація (доба)</span>
+                        <span class="stat-value ${f.recommended === 'discharge' ? 'text-danger' : 'text-success'}">
+                            ${f.recommended === 'discharge' ? 'РОЗРЯД' : 'ЗАРЯД'}
+                        </span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Заряд (найдешевші)</span>
+                        <span class="stat-value" style="font-size:0.8rem">${f.best_charge_hours ? f.best_charge_hours.map(h => `${h.hour} (${h.price} грн)`).join(', ') : '—'}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Розряд (найдорожчі)</span>
+                        <span class="stat-value" style="font-size:0.8rem">${f.best_discharge_hours ? f.best_discharge_hours.map(h => `${h.hour} (${h.price} грн)`).join(', ') : '—'}</span>
+                    </div>
+                </div>
+                <h3>Аналіз факторів:</h3>
+            `;
+            for (const a of f.analysis) {
+                const isAlert = a.factor.includes('прильот') || a.factor.includes('АЕС');
+                const borderColor = isAlert ? 'var(--danger)' : 'var(--info)';
+                html += `<div class="factor-item" style="border-left-color: ${borderColor}"><strong>${a.factor}:</strong> ${a.value}<br><small>${a.impact} → ${a.effect}</small></div>`;
+            }
+            if (f.cheap_hours && f.cheap_hours.length > 0) {
+                html += `<div class="alert alert-success"><strong>Профіцит! Ціна < 50 грн:</strong> ${f.cheap_hours.map(h => `${h.hour} (${h.price} грн)`).join(', ')}</div>`;
+            }
+            if (f.deficit_hours && f.deficit_hours.length > 0) {
+                html += `<div class="alert alert-danger"><strong>Дефіцит! Ціна > 2000 грн:</strong> ${f.deficit_hours.map(h => `${h.hour} (${h.price} грн)`).join(', ')}</div>`;
+            }
+            if (f.has_10uah) {
+                html += `<div class="alert alert-warning"><strong>Ціна 10 грн!</strong> Очікується екстремально низька ціна. Причина: надлишок ВДЕ + низьке споживання. Максимально заряджайте батарею!</div>`;
+            }
+            container.innerHTML = html;
+        });
+}
+
+function loadOreePrices() {
+    Promise.all([
+        fetch('/api/oree_prices').then(r => r.json()),
+        fetch('/api/idm_prices').then(r => r.json())
+    ]).then(([dam, idm]) => {
+        const traces = [];
+        const colors = ['#FF5722', '#4CAF50', '#2196F3', '#FF9800', '#9C27B0', '#00BCD4', '#E91E63'];
+        const chartTitle = 'Ціни РДН та ВДР (останні 7 днів)';
+
+        function addTraces(data, market, dash) {
+            if (!data.success || !data.prices) return;
+            const byDate = {};
+            for (const p of data.prices) {
+                if (!byDate[p.date]) byDate[p.date] = [];
+                byDate[p.date].push(p);
+            }
+            const dates = Object.keys(byDate).slice(-4);
+            let ci = 0;
+            for (const d of dates) {
+                const pts = byDate[d].sort((a, b) => a.hour - b.hour);
+                traces.push({
+                    x: pts.map(p => `${p.hour}:00`),
+                    y: pts.map(p => p.price),
+                    type: 'scatter', mode: 'lines+markers',
+                    name: `${d} ${market}`,
+                    line: { dash: dash, width: 1.5 },
+                    marker: { size: 4 },
+                });
+                ci++;
+            }
+        }
+
+        addTraces(dam, 'РДН', 'solid');
+        addTraces(idm, 'ВДР', 'dash');
+
+        if (traces.length > 0) {
+            Plotly.newPlot('oree-chart', traces, {
+                title: chartTitle,
+                xaxis: { title: 'Година' },
+                yaxis: { title: 'Ціна, грн/МВт·год' },
+                margin: { t: 30, r: 20, b: 40, l: 60 }
+            });
+        } else {
+            document.getElementById('oree-chart').innerHTML = '<p>Дані РДН/ВДР недоступні. Використовуються розрахункові дані для демонстрації.</p>';
+        }
+    });
+}
+
+function loadManualFactors() {
+    fetch('/api/factors/manual')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const f = data.factors;
+            document.getElementById('factorNuclear').checked = f.nuclear_outage || false;
+            document.getElementById('factorMissile').value = Math.round((f.missile_risk || 0) * 100);
+            document.getElementById('missileRiskLabel').textContent = Math.round((f.missile_risk || 0) * 100) + '%';
+        });
+}
+
+function saveManualFactors() {
+    const nuclear = document.getElementById('factorNuclear').checked;
+    const missile = parseInt(document.getElementById('factorMissile').value) / 100;
+    const btn = document.querySelector('#manualFactorsForm .btn');
+    const status = document.getElementById('factorsSaveStatus');
+
+    fetch('/api/factors/manual', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            nuclear_outage: nuclear,
+            missile_risk: missile
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        status.textContent = data.success ? 'Збережено!' : 'Помилка';
+        status.style.color = data.success ? 'var(--success)' : 'var(--danger)';
+        setTimeout(() => status.textContent = '', 3000);
+    });
+}
+</script>
+{% endblock %}

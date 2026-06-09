@@ -1,0 +1,15 @@
+services:
+  energy-predict:
+    build: .
+    container_name: energy-prediction-ua
+    ports:
+      - "5000:5000"
+    environment:
+      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY:-demo_key}
+      - ENTSOE_API_KEY=${ENTSOE_API_KEY:-}
+    volumes:
+      - energy_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  energy_data:

@@ -1,0 +1,395 @@
+{% extends "base.html" %}
+{% block title %}Дашборд - Energy Predictor UA{% endblock %}
+{% block content %}
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Статистика даних 2025</h2>
+            <div class="stats-grid">
+                <div class="stat">
+                    <span class="stat-label">Період</span>
+                    <span class="stat-value">{{ stats.date_range }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Всього записів</span>
+                    <span class="stat-value">{{ stats.total_rows }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Мін ціна</span>
+                    <span class="stat-value" style="color: var(--success)">{{ stats.price_min }} грн</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Макс ціна</span>
+                    <span class="stat-value" style="color: var(--danger)">{{ stats.price_max }} грн</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Середня ціна</span>
+                    <span class="stat-value">{{ stats.price_mean }} грн</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Годин профіциту</span>
+                    <span class="stat-value">{{ stats.surplus_hours_count }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Модель прогнозування</h2>
+            <div class="stats-grid">
+                <div class="stat">
+                    <span class="stat-label">Статус</span>
+                    <span class="stat-value {% if model_info.status == 'trained' %}text-success{% else %}text-warning{% endif %}">
+                        {{ 'Навчена' if model_info.status == 'trained' else 'Не навчена' }}
+                    </span>
+                </div>
+                {% if model_info.status == 'trained' %}
+                <div class="stat">
+                    <span class="stat-label">R²</span>
+                    <span class="stat-value">{{ model_info.r2 }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">MAE</span>
+                    <span class="stat-value">{{ model_info.mae }} грн</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">RMSE</span>
+                    <span class="stat-value">{{ model_info.rmse }} грн</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Тренувальних</span>
+                    <span class="stat-value">{{ model_info.n_train }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Тестових</span>
+                    <span class="stat-value">{{ model_info.n_test }}</span>
+                </div>
+                {% endif %}
+            </div>
+            <button class="btn btn-primary" onclick="retrainModel()" style="margin-top: 1rem">
+                Перетренувати модель
+            </button>
+            <span id="train-status" style="margin-left: 1rem"></span>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Прогноз на завтра (швидкий перегляд)</h2>
+            <div id="quick-chart" style="height: 400px;"></div>
+            <div id="quick-table"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Стан ОЕС (генерація по типах)</h2>
+            <div id="genmix-stats" class="stats-grid">
+                <p>Завантаження...</p>
+            </div>
+            <div id="genmix-chart" style="height: 200px; margin-top: 1rem;"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Індекс генерації ВДЕ</h2>
+            <div id="renewable-zones" class="stats-grid"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Фактори впливу на ціну</h2>
+            <div id="factors-content" class="factors-grid">
+                <p>Завантаження даних...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Профіцит енергії - історичний аналіз</h2>
+            <div id="surplus-chart" style="height: 300px;"></div>
+            <div class="info-box">
+                <strong>Коли очікувати ціну 10 грн?</strong>
+                <p>Ціна 10 грн/МВт·год з'являється при профіциті генерації в ОЕС України. Основні фактори:</p>
+                <ul>
+                    <li><strong>Весняно-літній період:</strong> надлишок сонячної генерації вдень</li>
+                    <li><strong>Вітряна погода:</strong> ВЕС дають надлишок вночі</li>
+                    <li><strong>Вихідні та свята:</strong> зниження промислового споживання</li>
+                    <li><strong>Відсутність атомних блоків в ремонті:</strong> базова генерація не знижується</li>
+                    <li><strong>Тепла погода:</strong> зниження споживання на опалення</li>
+                </ul>
+                <p>Типові години профіциту: <strong>10:00-15:00</strong> (максимум СЕС) та <strong>02:00-05:00</strong> (нічний мінімум споживання)</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadQuickPrediction();
+    loadFactors();
+    loadSurplusHistory();
+    loadGenerationMix();
+    loadRenewableIndex();
+});
+
+function retrainModel() {
+    document.getElementById('train-status').textContent = 'Тренування...';
+    fetch('/train', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) {
+                document.getElementById('train-status').textContent = `Готово! R²=${d.metrics.r2}`;
+                location.reload();
+            } else {
+                document.getElementById('train-status').textContent = `Помилка: ${d.error}`;
+            }
+        });
+}
+
+function loadQuickPrediction() {
+    const dates = [];
+    const today = new Date();
+    for (let i = 1; i <= 3; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() + i);
+        dates.push(d.toISOString().split('T')[0]);
+    }
+
+    fetch(`/api/predict_multi?dates=${dates.join(',')}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                document.getElementById('quick-chart').innerHTML = '<p>Немає прогнозу. Спочатку навчіть модель.</p>';
+                return;
+            }
+            const traces = [];
+            for (const [date, preds] of Object.entries(data.predictions)) {
+                if (!preds || preds.length === 0) continue;
+                const hours = preds.map(p => p.hour);
+                const prices = preds.map(p => p.price);
+                traces.push({
+                    x: hours,
+                    y: prices,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: date
+                });
+            }
+            if (traces.length > 0) {
+                Plotly.newPlot('quick-chart', traces, {
+                    title: 'Прогноз цін на найближчі дні',
+                    xaxis: { title: 'Година' },
+                    yaxis: { title: 'Ціна, грн/МВт·год' },
+                    margin: { t: 40, r: 20, b: 40, l: 60 }
+                });
+            }
+        });
+}
+
+function loadFactors() {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const dateStr = tomorrow.toISOString().split('T')[0];
+
+    fetch(`/api/factors?date=${dateStr}`)
+        .then(r => r.json())
+        .then(data => {
+            const container = document.getElementById('factors-content');
+            if (!data.success) {
+                container.innerHTML = '<p>Дані недоступні</p>';
+                return;
+            }
+            const f = data.factors;
+            let html = `
+                <div class="factor-card ${f.has_surplus ? 'surplus' : ''} ${f.has_deficit ? 'deficit' : ''}">
+                    <div class="factor-main">
+                        <span class="factor-label">Середня ціна</span>
+                        <span class="factor-value">${f.avg_price} грн</span>
+                    </div>
+                    <div class="factor-main">
+                        <span class="factor-label">Мін/Макс</span>
+                        <span class="factor-value">${f.min_price.price} / ${f.max_price.price} грн</span>
+                    </div>
+                    <div class="factor-main">
+                        <span class="factor-label">Волатильність</span>
+                        <span class="factor-value">${f.volatility} грн</span>
+                    </div>
+                    <div class="factor-main">
+                        <span class="factor-label">Рекомендація (доба)</span>
+                        <span class="factor-value ${f.recommended === 'discharge' ? 'text-danger' : 'text-success'}">
+                            ${f.recommended === 'discharge' ? 'РОЗРЯД' : 'ЗАРЯД'}
+                        </span>
+                    </div>
+                    <div class="factor-main">
+                        <span class="factor-label">Кращі години для заряду</span>
+                        <span class="factor-value">${f.best_charge_hours ? f.best_charge_hours.map(h => `${h.hour} (${h.price} грн)`).join(', ') : '—'}</span>
+                    </div>
+                    <div class="factor-main">
+                        <span class="factor-label">Кращі години для розряду</span>
+                        <span class="factor-value">${f.best_discharge_hours ? f.best_discharge_hours.map(h => `${h.hour} (${h.price} грн)`).join(', ') : '—'}</span>
+                    </div>
+                </div>
+                <h3>Аналіз факторів</h3>
+            `;
+            for (const a of f.analysis) {
+                html += `
+                    <div class="factor-item">
+                        <strong>${a.factor}:</strong> ${a.value}
+                        <br><small>${a.impact} → ${a.effect}</small>
+                    </div>
+                `;
+            }
+            if (f.cheap_hours && f.cheap_hours.length > 0) {
+                html += `<div class="alert alert-success">
+                    <strong>🟢 Профіцит!</strong> Найдешевші години: ${f.cheap_hours.map(h => h.hour).join(', ')}
+                </div>`;
+            }
+            if (f.deficit_hours && f.deficit_hours.length > 0) {
+                html += `<div class="alert alert-danger">
+                    <strong>🔴 Дефіцит!</strong> Найдорожчі години: ${f.deficit_hours.map(h => h.hour).join(', ')}
+                </div>`;
+            }
+            container.innerHTML = html;
+        });
+}
+
+function loadGenerationMix() {
+    fetch('/api/generation_mix')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const s = data.stats;
+            const container = document.getElementById('genmix-stats');
+            const h = s.latest;
+            let html = `
+                <div class="stat"><span class="stat-label">АЕС</span><span class="stat-value">${h.nuclear_mw} МВт</span></div>
+                <div class="stat"><span class="stat-label">ТЕС</span><span class="stat-value">${h.thermal_mw} МВт</span></div>
+                <div class="stat"><span class="stat-label">ГЕС</span><span class="stat-value">${h.hydro_mw} МВт</span></div>
+                <div class="stat"><span class="stat-label">СЕС</span><span class="stat-value">${h.solar_mw} МВт</span></div>
+                <div class="stat"><span class="stat-label">ВЕС</span><span class="stat-value">${h.wind_mw} МВт</span></div>
+                <div class="stat"><span class="stat-label">Всього</span><span class="stat-value">${h.total_gen_mw} МВт</span></div>
+            `;
+            if (s.source === 'entsoe') {
+                html += `<div class="stat"><span class="stat-label" style="color: var(--success)">Джерело</span><span class="stat-value" style="color: var(--success); font-size: 0.8rem">ENTSO-E</span></div>`;
+            } else {
+                html += `<div class="stat"><span class="stat-label" style="color: var(--warning)">Джерело</span><span class="stat-value" style="color: var(--warning); font-size: 0.8rem">Розрахунок</span></div>`;
+            }
+            container.innerHTML = html;
+
+            const shares = s.shares;
+            const genData = [
+                {label: 'АЕС', value: shares.nuclear_share},
+                {label: 'ТЕС', value: shares.thermal_share},
+                {label: 'ГЕС', value: shares.hydro_share},
+                {label: 'СЕС', value: shares.solar_share},
+                {label: 'ВЕС', value: shares.wind_share},
+            ];
+            Plotly.newPlot('genmix-chart', [{
+                type: 'pie',
+                labels: genData.map(d => d.label),
+                values: genData.map(d => d.value),
+                marker: {colors: ['#4CAF50', '#FF9800', '#2196F3', '#FFC107', '#9C27B0']},
+                textinfo: 'label+percent',
+                hoverinfo: 'label+percent',
+            }], {
+                margin: {t: 0, r: 0, b: 0, l: 0},
+                height: 200,
+                showlegend: false,
+            });
+        });
+}
+
+function loadRenewableIndex() {
+    fetch('/api/renewable_index')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const container = document.getElementById('renewable-zones');
+            const zones = data.zones || {};
+            let html = '';
+            for (const [key, z] of Object.entries(zones)) {
+                if (!z.data || z.data.length === 0) continue;
+                const last = z.data[z.data.length - 1];
+                html += `
+                    <div class="stat">
+                        <span class="stat-label">${z.label}</span>
+                        <span class="stat-value" style="font-size: 0.85rem">
+                            ☀️ ${last.solar_gen_index} · 💨 ${last.wind_gen_index}
+                        </span>
+                    </div>
+                `;
+            }
+            if (data.forecast && data.forecast.length > 0) {
+                const f = data.forecast;
+                const hours = f.map(r => `${r.hour}:00`);
+                const solar = f.map(r => r.solar_index || 0);
+                const wind = f.map(r => (r.wind_index || 0) * 500);
+                const total = f.map(r => r.renewable_index || 0);
+                container.innerHTML = html + `<div id="renewable-chart" style="grid-column: 1 / -1; height: 200px;"></div>`;
+                Plotly.newPlot('renewable-chart', [
+                    {x: hours, y: solar, type: 'scatter', mode: 'lines', name: 'Сонячний індекс', marker: {color: '#FFC107'}},
+                    {x: hours, y: wind, type: 'scatter', mode: 'lines', name: 'Вітровий індекс', marker: {color: '#2196F3'}},
+                    {x: hours, y: total, type: 'scatter', mode: 'lines', name: 'ВДЕ індекс', marker: {color: '#4CAF50'}},
+                ], {
+                    title: 'Індекс генерації ВДЕ (прогноз)',
+                    xaxis: {title: 'Година'},
+                    yaxis: {title: 'Індекс'},
+                    margin: {t: 30, r: 20, b: 40, l: 50}
+                });
+            } else {
+                container.innerHTML = html || '<p>Дані недоступні</p>';
+            }
+        });
+}
+
+function loadSurplusHistory() {
+    fetch('/api/historical_surplus')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success || !data.surplus_by_hour) return;
+            const hours = data.surplus_by_hour.map(d => d.hour);
+            const counts = data.surplus_by_hour.map(d => d.count);
+            const avgPrices = data.surplus_by_hour.map(d => d.avg_price);
+
+            const trace1 = {
+                x: hours, y: counts,
+                type: 'bar', name: 'Кількість випадків',
+                marker: { color: '#2196F3' },
+                yaxis: 'y'
+            };
+            const trace2 = {
+                x: hours, y: avgPrices,
+                type: 'scatter', mode: 'lines+markers', name: 'Середня ціна профіциту',
+                marker: { color: '#FF9800' },
+                yaxis: 'y2'
+            };
+            Plotly.newPlot('surplus-chart', [trace1, trace2], {
+                title: 'Профіцит по годинах',
+                xaxis: { title: 'Година' },
+                yaxis: { title: 'К-сть випадків', side: 'left' },
+                yaxis2: { title: 'Ціна грн', overlaying: 'y', side: 'right' },
+                margin: { t: 30, r: 40, b: 40, l: 50 }
+            });
+        });
+}
+</script>
+{% endblock %}
