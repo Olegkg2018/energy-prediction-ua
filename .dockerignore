@@ -3,10 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 .env
-*.feather
 data/forecast_cache.json
 data/manual_factors.json
-data/oree_prices.feather
 data/cache.feather
-model/model.pkl
 .flask-env
