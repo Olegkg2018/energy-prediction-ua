@@ -78,6 +78,15 @@
     </div>
 </div>
 
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Порівняння прогнозу з реальними цінами OREE</h2>
+            <div id="real-comparison" class="info-box">Завантаження реальних цін...</div>
+        </div>
+    </div>
+</div>
+
 <div class="row" id="optimization-section" style="display:none">
     <div class="col">
         <div class="card">
@@ -115,9 +124,15 @@
 
 {% block scripts %}
 <script>
+function chartH(desktop) {
+    return window.innerWidth < 600 ? Math.min(desktop * 0.55, 280) : desktop;
+}
+
+let oreeCache = null;
+
 document.addEventListener('DOMContentLoaded', function() {
     loadPrediction();
-    loadOreePrices();
+    loadOreePricesCache();
     loadManualFactors();
 });
 
@@ -127,6 +142,15 @@ function getBatteryParams() {
         capacity: document.getElementById('batteryCapacity').value,
         initial_soc: document.getElementById('batterySoc').value
     };
+}
+
+function loadOreePricesCache() {
+    fetch('/api/oree_prices')
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) oreeCache = data.prices;
+        })
+        .catch(() => {});
 }
 
 function loadPrediction() {
@@ -140,6 +164,7 @@ function loadPrediction() {
             }
             renderPredictionChart(data.predictions, date);
             renderPredictionTable(data.predictions);
+            renderRealComparison(data.predictions, date);
         });
 }
 
@@ -151,7 +176,7 @@ function renderPredictionChart(predictions, date) {
     const trace1 = {
         x: hours, y: prices,
         type: 'scatter', mode: 'lines+markers',
-        name: 'Ціна грн/МВт·год',
+        name: '🔮 Прогноз',
         marker: { color: '#FF5722', size: 8 },
         line: { color: '#FF5722', width: 2 },
         yaxis: 'y'
@@ -159,11 +184,26 @@ function renderPredictionChart(predictions, date) {
     const trace2 = {
         x: hours, y: temps,
         type: 'scatter', mode: 'lines+markers',
-        name: 'Температура °C',
+        name: '🌡️ Температура °C',
         marker: { color: '#2196F3', size: 6 },
         line: { color: '#2196F3', width: 1, dash: 'dot' },
         yaxis: 'y2'
     };
+
+    const traces = [trace1, trace2];
+
+    const realPrices = oreeCache ? oreeCache.filter(p => p.date === date).sort((a, b) => a.hour - b.hour) : [];
+    if (realPrices.length > 0) {
+        traces.push({
+            x: realPrices.map(p => `${String(p.hour).padStart(2, '0')}:00`),
+            y: realPrices.map(p => p.price),
+            type: 'scatter', mode: 'lines+markers',
+            name: '📊 Реальна ціна (OPEE)',
+            marker: { color: '#00E676', size: 8 },
+            line: { color: '#00E676', width: 2.5 },
+            yaxis: 'y'
+        });
+    }
 
     const avgPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
     const shape = {
@@ -172,14 +212,75 @@ function renderPredictionChart(predictions, date) {
         line: { color: 'gray', width: 1, dash: 'dash' }
     };
 
-    Plotly.newPlot('price-chart', [trace1, trace2], {
-        title: `Прогноз цін на ${date} (сер. ${avgPrice.toFixed(0)} грн)`,
-        xaxis: { title: 'Година', dtick: 2 },
+    const isMobile = window.innerWidth < 600;
+    Plotly.newPlot('price-chart', traces, {
+        title: `Прогноз на ${date}` + (realPrices.length > 0 ? ' + реальні ціни OREE' : ''),
+        xaxis: { title: 'Година', dtick: isMobile ? 4 : 2 },
         yaxis: { title: 'Ціна, грн/МВт·год', side: 'left' },
         yaxis2: { title: 'Температура, °C', overlaying: 'y', side: 'right' },
-        shapes: [shape],
-        margin: { t: 40, r: 50, b: 40, l: 60 }
+        shapes: realPrices.length > 0 ? undefined : [shape],
+        height: chartH(450),
+        margin: { t: isMobile ? 30 : 40, r: isMobile ? 50 : 50, b: isMobile ? 30 : 40, l: isMobile ? 40 : 60 },
+        responsive: true,
+        autosize: true,
+        legend: { orientation: isMobile ? 'v' : 'h', y: isMobile ? 0.5 : 1.1 }
     });
+}
+
+function renderRealComparison(predictions, date) {
+    const container = document.getElementById('real-comparison');
+    if (!container) return;
+    const realPrices = oreeCache ? oreeCache.filter(p => p.date === date).sort((a, b) => a.hour - b.hour) : [];
+    if (realPrices.length === 0) {
+        container.innerHTML = '<div class="info-box">ℹ️ Реальних цін OREE за цю дату ще немає. Вони з\'являться після завершення доби.</div>';
+        return;
+    }
+    const priceByHour = {};
+    for (const p of predictions) priceByHour[p.hour] = p.price;
+    let totalDiff = 0, count = 0, maxDiff = 0, mae = 0;
+    const rows = [];
+    for (const r of realPrices) {
+        const h = `${String(r.hour).padStart(2, '0')}:00`;
+        const pred = priceByHour[h];
+        if (pred !== undefined) {
+            const diff = Math.abs(pred - r.price);
+            totalDiff += diff;
+            count++;
+            if (diff > maxDiff) maxDiff = diff;
+            rows.push({hour: h, real: r.price, pred: Math.round(pred), diff: Math.round(diff)});
+        }
+    }
+    if (count > 0) mae = (totalDiff / count).toFixed(0);
+    const has10UahReal = realPrices.some(p => p.price < 20);
+    const has10UahPred = predictions.some(p => p.price < 20);
+    let html = `
+        <div class="stats-grid">
+            <div class="stat">
+                <span class="stat-label">Реальних годин</span>
+                <span class="stat-value">${count}/24</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">MAE (похибка)</span>
+                <span class="stat-value ${mae > 300 ? 'text-danger' : mae > 150 ? 'text-warning' : 'text-success'}">${mae} грн</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Макс. відхил</span>
+                <span class="stat-value ${maxDiff > 500 ? 'text-danger' : 'text-warning'}">${Math.round(maxDiff)} грн</span>
+            </div>
+        </div>
+    `;
+    if (has10UahReal && !has10UahPred) {
+        html += '<div class="alert alert-warning"><strong>⚠️ Модель не передбачає ціну 10 грн!</strong> В реальних датах OREE є години з ціною &lt; 20 грн, але прогноз їх не показує. Причина: модель навчена на синтетичних даних без достатнього впливу сонячної генерації.</div>';
+    } else if (has10UahReal && has10UahPred) {
+        html += '<div class="alert alert-success"><strong>✅ Модель коректно передбачає низькі ціни!</strong></div>';
+    }
+    html += '<div class="table-container"><table><thead><tr><th>Година</th><th>Реальна</th><th>Прогноз</th><th>Відхил</th></tr></thead><tbody>';
+    for (const r of rows) {
+        const diffColor = r.diff > 500 ? 'color:var(--danger)' : r.diff > 200 ? 'color:var(--warning)' : '';
+        html += `<tr><td>${r.hour}</td><td>${r.real} грн</td><td>${r.pred} грн</td><td style="${diffColor}">${r.diff} грн</td></tr>`;
+    }
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
 }
 
 function renderPredictionTable(predictions) {
@@ -294,6 +395,7 @@ function renderOptimizationChart(opt) {
         stepsLabels.push(`${t}:00`);
     }
 
+    const isMob = window.innerWidth < 600;
     Plotly.newPlot('optimization-chart', [
         {
             x: hours, y: prices,
@@ -319,16 +421,19 @@ function renderOptimizationChart(opt) {
             type: 'scatter', mode: 'lines',
             name: 'Рівень заряду (МВт·год)',
             yaxis: 'y3',
-            line: { color: '#2196F3', width: 3, shape: 'vh' }
+            line: { color: '#2196F3', width: isMob ? 2 : 3, shape: 'vh' }
         }
     ], {
-        title: `Оптимізація: ${opt.battery_power_mw} МВт / ${opt.battery_capacity_mwh} МВт·год (поч. ${opt.initial_soc_pct}%)`,
-        xaxis: { title: 'Година' },
+        title: `Оптимізація: ${opt.battery_power_mw}МВт / ${opt.battery_capacity_mwh}МВт·год (${opt.initial_soc_pct}%)`,
+        xaxis: { title: 'Година', dtick: isMob ? 4 : 2 },
         yaxis: { title: 'Ціна, грн', side: 'left' },
         yaxis2: { title: 'Потужність, МВт', overlaying: 'y', side: 'right' },
-        yaxis3: { title: 'Заряд, МВт·год', side: 'right', position: 0.9 },
+        yaxis3: { title: 'Заряд, МВт·год', side: 'right', position: isMob ? 0.85 : 0.9 },
         barmode: 'overlay',
-        margin: { t: 40, r: 60, b: 40, l: 60 }
+        height: chartH(400),
+        margin: { t: isMob ? 30 : 40, r: isMob ? 10 : 60, b: isMob ? 30 : 40, l: isMob ? 40 : 60 },
+        responsive: true,
+        autosize: true
     });
 }
 
@@ -475,11 +580,15 @@ function loadOreePrices() {
         addTraces(idm, 'ВДР', 'dash');
 
         if (traces.length > 0) {
+            const m = window.innerWidth < 600;
             Plotly.newPlot('oree-chart', traces, {
                 title: chartTitle,
-                xaxis: { title: 'Година' },
+                xaxis: { title: 'Година', dtick: m ? 4 : 2 },
                 yaxis: { title: 'Ціна, грн/МВт·год' },
-                margin: { t: 30, r: 20, b: 40, l: 60 }
+                height: chartH(300),
+                margin: { t: m ? 25 : 30, r: m ? 10 : 20, b: m ? 30 : 40, l: m ? 40 : 60 },
+                responsive: true,
+                autosize: true
             });
         } else {
             document.getElementById('oree-chart').innerHTML = '<p>Дані РДН/ВДР недоступні. Використовуються розрахункові дані для демонстрації.</p>';

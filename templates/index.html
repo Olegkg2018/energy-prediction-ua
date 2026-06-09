@@ -143,6 +143,10 @@
 
 {% block scripts %}
 <script>
+function chartH(desktop) {
+    return window.innerWidth < 600 ? Math.min(desktop * 0.55, 280) : desktop;
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     loadQuickPrediction();
     loadFactors();
@@ -195,11 +199,15 @@ function loadQuickPrediction() {
                 });
             }
             if (traces.length > 0) {
+                const m = window.innerWidth < 600;
                 Plotly.newPlot('quick-chart', traces, {
                     title: 'Прогноз цін на найближчі дні',
-                    xaxis: { title: 'Година' },
+                    xaxis: { title: 'Година', dtick: m ? 4 : 2 },
                     yaxis: { title: 'Ціна, грн/МВт·год' },
-                    margin: { t: 40, r: 20, b: 40, l: 60 }
+                    height: chartH(400),
+                    margin: { t: m ? 30 : 40, r: m ? 10 : 20, b: m ? 30 : 40, l: m ? 40 : 60 },
+                    responsive: true,
+                    autosize: true
                 });
             }
         });
@@ -280,7 +288,10 @@ function loadGenerationMix() {
             const s = data.stats;
             const container = document.getElementById('genmix-stats');
             const h = s.latest;
+            const dataTime = `${h.date} ${h.hour}:00`;
+            const updatedStr = s.updated ? new Date(s.updated).toLocaleString('uk-UA', {hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'numeric', year: 'numeric'}) : '—';
             let html = `
+                <div class="stat"><span class="stat-label">Дата/час даних</span><span class="stat-value" style="font-size: 0.85rem">${dataTime}</span></div>
                 <div class="stat"><span class="stat-label">АЕС</span><span class="stat-value">${h.nuclear_mw} МВт</span></div>
                 <div class="stat"><span class="stat-label">ТЕС</span><span class="stat-value">${h.thermal_mw} МВт</span></div>
                 <div class="stat"><span class="stat-label">ГЕС</span><span class="stat-value">${h.hydro_mw} МВт</span></div>
@@ -289,9 +300,9 @@ function loadGenerationMix() {
                 <div class="stat"><span class="stat-label">Всього</span><span class="stat-value">${h.total_gen_mw} МВт</span></div>
             `;
             if (s.source === 'entsoe') {
-                html += `<div class="stat"><span class="stat-label" style="color: var(--success)">Джерело</span><span class="stat-value" style="color: var(--success); font-size: 0.8rem">ENTSO-E</span></div>`;
+                html += `<div class="stat"><span class="stat-label" style="color: var(--success)">Джерело</span><span class="stat-value" style="color: var(--success); font-size: 0.8rem">ENTSO-E (оновлено ${updatedStr})</span></div>`;
             } else {
-                html += `<div class="stat"><span class="stat-label" style="color: var(--warning)">Джерело</span><span class="stat-value" style="color: var(--warning); font-size: 0.8rem">Розрахунок</span></div>`;
+                html += `<div class="stat"><span class="stat-label" style="color: var(--warning)">Джерело</span><span class="stat-value" style="color: var(--warning); font-size: 0.8rem">Розрахунок (немає ключа ENTSO-E)</span></div>`;
             }
             container.innerHTML = html;
 
@@ -312,7 +323,9 @@ function loadGenerationMix() {
                 hoverinfo: 'label+percent',
             }], {
                 margin: {t: 0, r: 0, b: 0, l: 0},
-                height: 200,
+                height: chartH(200),
+                responsive: true,
+                autosize: true,
                 showlegend: false,
             });
         });
@@ -345,15 +358,20 @@ function loadRenewableIndex() {
                 const wind = f.map(r => (r.wind_index || 0) * 500);
                 const total = f.map(r => r.renewable_index || 0);
                 container.innerHTML = html + `<div id="renewable-chart" style="grid-column: 1 / -1; height: 200px;"></div>`;
+                const m = window.innerWidth < 600;
                 Plotly.newPlot('renewable-chart', [
-                    {x: hours, y: solar, type: 'scatter', mode: 'lines', name: 'Сонячний індекс', marker: {color: '#FFC107'}},
-                    {x: hours, y: wind, type: 'scatter', mode: 'lines', name: 'Вітровий індекс', marker: {color: '#2196F3'}},
-                    {x: hours, y: total, type: 'scatter', mode: 'lines', name: 'ВДЕ індекс', marker: {color: '#4CAF50'}},
+                    {x: hours, y: solar, type: 'scatter', mode: 'lines', name: '☀️ Сонячний індекс (СЕС)', marker: {color: '#FFC107'}},
+                    {x: hours, y: wind, type: 'scatter', mode: 'lines', name: '💨 Вітровий індекс (ВЕС)', marker: {color: '#2196F3'}},
+                    {x: hours, y: total, type: 'scatter', mode: 'lines', name: '🌱 Сумарний ВДЕ', marker: {color: '#4CAF50'}},
                 ], {
                     title: 'Індекс генерації ВДЕ (прогноз)',
-                    xaxis: {title: 'Година'},
+                    xaxis: {title: 'Година', dtick: m ? 4 : 2},
                     yaxis: {title: 'Індекс'},
-                    margin: {t: 30, r: 20, b: 40, l: 50}
+                    height: chartH(220),
+                    margin: {t: m ? 20 : 30, r: m ? 10 : 20, b: m ? 30 : 50, l: m ? 40 : 50},
+                    responsive: true,
+                    autosize: true,
+                    legend: {orientation: 'h', y: -0.3, x: 0}
                 });
             } else {
                 container.innerHTML = html || '<p>Дані недоступні</p>';
@@ -382,12 +400,16 @@ function loadSurplusHistory() {
                 marker: { color: '#FF9800' },
                 yaxis: 'y2'
             };
+            const m = window.innerWidth < 600;
             Plotly.newPlot('surplus-chart', [trace1, trace2], {
                 title: 'Профіцит по годинах',
-                xaxis: { title: 'Година' },
+                xaxis: { title: 'Година', dtick: m ? 4 : 2 },
                 yaxis: { title: 'К-сть випадків', side: 'left' },
                 yaxis2: { title: 'Ціна грн', overlaying: 'y', side: 'right' },
-                margin: { t: 30, r: 40, b: 40, l: 50 }
+                height: chartH(300),
+                margin: { t: m ? 20 : 30, r: m ? 10 : 40, b: m ? 30 : 40, l: m ? 40 : 50 },
+                responsive: true,
+                autosize: true
             });
         });
 }
