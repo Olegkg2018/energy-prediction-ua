@@ -10,14 +10,14 @@ CURRENT_DIR = os.path.dirname(__file__)
 sys.path.insert(0, CURRENT_DIR)
 
 # Load .env file if present (without python-dotenv)
-    _env_path = os.path.join(CURRENT_DIR, '.env')
+_env_path = os.path.join(CURRENT_DIR, '.env')
 if os.path.exists(_env_path):
     with open(_env_path) as _f:
         for _line in _f:
             _line = _line.strip()
             if _line and not _line.startswith('#') and '=' in _line:
                 _k, _v = _line.split('=', 1)
-                os.environ.setdefault(_k.strip(), _v.strip().strip("'\"")))
+                os.environ.setdefault(_k.strip(), _v.strip().strip("'\""))
 
 from data.loader import get_combined_dataset, get_data_statistics, clear_cache
 from model.train import train_model, load_model
