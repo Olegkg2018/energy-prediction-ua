@@ -167,15 +167,18 @@ def generate_synthetic_forecast():
 
 def save_forecast_cache(df):
     try:
+        df = df.copy()
+        if 'datetime' in df.columns:
+            df['datetime'] = df['datetime'].astype(str)
         rows = df.to_dict('records')
         cache = {'timestamp': datetime.now().isoformat(), 'data': rows}
         os.makedirs(os.path.dirname(WEATHER_CACHE), exist_ok=True)
         tmp = WEATHER_CACHE + '.tmp'
         with open(tmp, 'w') as f:
-            json.dump(cache, f)
+            json.dump(cache, f, default=str)
         os.replace(tmp, WEATHER_CACHE)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[WEATHER] Cache save error: {e}')
 
 def get_cached_forecast():
     if not os.path.exists(WEATHER_CACHE):
@@ -185,7 +188,10 @@ def get_cached_forecast():
             data = json.load(f)
         ts = datetime.fromisoformat(data['timestamp'])
         if datetime.now() - ts < timedelta(hours=3):
-            return pd.DataFrame(data['data'])
+            df = pd.DataFrame(data['data'])
+            if 'datetime' in df.columns:
+                df['datetime'] = pd.to_datetime(df['datetime'])
+            return df
     except Exception:
         pass
     return None

@@ -113,13 +113,14 @@ def _generate_synthetic_day(target_date, use_existing_as_ref=False):
     except ValueError:
         target_dt = datetime.now()
     month = target_dt.month
+    rng = np.random.RandomState(hash(target_date) % (2**31))
     rows = []
     for hour in range(24):
         base_temp = 5 + 15 * np.sin(np.pi * (month - 3) / 6)
         daily_variation = 7 * np.sin(np.pi * (hour - 6) / 12)
-        noise = np.random.normal(0, 2)
+        noise = rng.normal(0, 2)
         temp = round(base_temp + daily_variation + noise, 1)
-        clouds = int(np.clip(np.random.normal(50, 25), 0, 100))
+        clouds = int(np.clip(rng.normal(50, 25), 0, 100))
         wind = round(np.random.exponential(3), 1)
         solar_radiation = 0
         if 5 <= hour <= 21:
