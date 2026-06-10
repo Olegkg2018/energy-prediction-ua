@@ -31,7 +31,10 @@ def fetch_forecast():
         resp = requests.get(url, params=params, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
-            return parse_openweather_response(data)
+            df = parse_openweather_response(data)
+            if df is not None and len(df) > 0:
+                save_forecast_cache(df)
+                return df
     except Exception:
         pass
 
@@ -48,8 +51,9 @@ def fetch_forecast():
             data = resp.json()
             df = parse_25_forecast(data)
             if df is not None and len(df) > 0:
-                return interpolate_forecast(df)
-            return df
+                df = interpolate_forecast(df)
+                save_forecast_cache(df)
+                return df
     except Exception:
         pass
     return generate_synthetic_forecast()
@@ -158,14 +162,20 @@ def generate_synthetic_forecast():
             'solar_radiation': round(solar_radiation, 1)
         })
     df = pd.DataFrame(rows)
+    save_forecast_cache(df)
+    return df
+
+def save_forecast_cache(df):
     try:
+        rows = df.to_dict('records')
         cache = {'timestamp': datetime.now().isoformat(), 'data': rows}
         os.makedirs(os.path.dirname(WEATHER_CACHE), exist_ok=True)
-        with open(WEATHER_CACHE, 'w') as f:
+        tmp = WEATHER_CACHE + '.tmp'
+        with open(tmp, 'w') as f:
             json.dump(cache, f)
+        os.replace(tmp, WEATHER_CACHE)
     except Exception:
         pass
-    return df
 
 def get_cached_forecast():
     if not os.path.exists(WEATHER_CACHE):
