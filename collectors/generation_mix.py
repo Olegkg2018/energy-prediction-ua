@@ -234,7 +234,7 @@ def get_generation_stats(days=7):
     latest = df.sort_values('datetime').tail(1).iloc[0]
     recent_24h = df.tail(24)
     if 'source' in df.columns:
-        src_val = str(df['source'].iloc[0])
+        src_val = str(df['source'].iloc[0]).lower()
         if 'ukrenergo' in src_val:
             source_label = 'ukrenergo'
         elif 'entsoe' in src_val:
@@ -242,8 +242,7 @@ def get_generation_stats(days=7):
         else:
             source_label = 'sample'
     else:
-        entsoe_key = get_entsoe_api_key()
-        source_label = 'entsoe' if entsoe_key else 'sample'
+        source_label = 'ukrenergo'
     stats = {
         'updated': datetime.now().isoformat(),
         'latest': {

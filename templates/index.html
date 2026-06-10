@@ -301,8 +301,10 @@ function loadGenerationMix() {
             `;
             if (s.source === 'entsoe') {
                 html += `<div class="stat"><span class="stat-label" style="color: var(--success)">Джерело</span><span class="stat-value" style="color: var(--success); font-size: 0.8rem">ENTSO-E (оновлено ${updatedStr})</span></div>`;
+            } else if (s.source === 'ukrenergo') {
+                html += `<div class="stat"><span class="stat-label" style="color: var(--info)">Джерело</span><span class="stat-value" style="color: var(--info); font-size: 0.8rem">Ukrenergo (2014-2021) + розрахунок</span></div>`;
             } else {
-                html += `<div class="stat"><span class="stat-label" style="color: var(--warning)">Джерело</span><span class="stat-value" style="color: var(--warning); font-size: 0.8rem">Розрахунок (немає ключа ENTSO-E)</span></div>`;
+                html += `<div class="stat"><span class="stat-label" style="color: var(--warning)">Джерело</span><span class="stat-value" style="color: var(--warning); font-size: 0.8rem">Розрахункові дані</span></div>`;
             }
             container.innerHTML = html;
 

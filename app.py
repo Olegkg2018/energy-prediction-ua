@@ -205,12 +205,12 @@ def api_factors():
     avg_price = np.mean([p['price'] for p in prices])
     min_price = min(prices, key=lambda x: x['price'])
     max_price = max(prices, key=lambda x: x['price'])
-    surplus_hours = [p for p in prices if p['price'] < 200]
-    deficit_hours = [p for p in prices if p['price'] > 2000]
-    cheap_hours = [p for p in prices if p['price'] < 50]
+    surplus_hours = [p for p in prices if p['price'] < min(avg_price * 0.3, 200)]
+    deficit_hours = [p for p in prices if p['price'] > max(avg_price * 1.5, 3000)]
+    cheap_hours = [p for p in prices if p['price'] < min(avg_price * 0.15, 50)]
     volatility = np.std([p['price'] for p in prices])
 
-    recommended = 'discharge' if avg_price > 1500 else 'charge'
+    recommended = 'discharge' if avg_price > 2000 else 'charge'
 
     sorted_asc = sorted(prices, key=lambda x: x['price'])
     best_charge = [{'hour': p['hour'], 'price': round(p['price'], 2)} for p in sorted_asc[:5]]
