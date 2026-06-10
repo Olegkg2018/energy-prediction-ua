@@ -4,6 +4,7 @@ import pandas as pd
 import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.ensemble import HistGradientBoostingRegressor
 import xgboost as xgb
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__))
@@ -30,6 +31,7 @@ def train_model(data_df, force=False):
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
         'days_since_epoch',
     ]
+
     available = [c for c in feature_cols if c in data_df.columns]
     df = data_df.dropna(subset=['price'] + available).copy()
     if len(df) < 1000:
@@ -42,7 +44,7 @@ def train_model(data_df, force=False):
         X, y, test_size=0.15, random_state=42, shuffle=True
     )
 
-    model = xgb.XGBRegressor(
+    xgb_model = xgb.XGBRegressor(
         n_estimators=300,
         max_depth=8,
         learning_rate=0.05,
@@ -54,21 +56,51 @@ def train_model(data_df, force=False):
         random_state=42,
         n_jobs=-1
     )
+    xgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
 
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_test, y_test)],
-        verbose=False
+    hgb_model = HistGradientBoostingRegressor(
+        max_iter=300,
+        max_depth=8,
+        learning_rate=0.05,
+        min_samples_leaf=5,
+        random_state=42,
     )
+    hgb_model.fit(X_train, y_train)
 
-    y_pred = model.predict(X_test)
+    pred_xgb = xgb_model.predict(X_test)
+    pred_hgb = hgb_model.predict(X_test)
+
+    mae_xgb = mean_absolute_error(y_test, pred_xgb)
+    mae_hgb = mean_absolute_error(y_test, pred_hgb)
+
+    inv_xgb = 1.0 / max(mae_xgb, 0.01)
+    inv_hgb = 1.0 / max(mae_hgb, 0.01)
+    w_xgb = inv_xgb / (inv_xgb + inv_hgb)
+    w_hgb = inv_hgb / (inv_xgb + inv_hgb)
+
+    pred_ensemble = pred_xgb * w_xgb + pred_hgb * w_hgb
+    mae_ensemble = mean_absolute_error(y_test, pred_ensemble)
+    r2_ensemble = r2_score(y_test, pred_ensemble)
+
+    model = {
+        'xgb': xgb_model,
+        'hgb': hgb_model,
+        'weight_xgb': round(w_xgb, 4),
+        'weight_hgb': round(w_hgb, 4),
+    }
+
     metrics = {
-        'mae': round(float(mean_absolute_error(y_test, y_pred)), 2),
-        'rmse': round(float(np.sqrt(mean_squared_error(y_test, y_pred))), 2),
-        'r2': round(float(r2_score(y_test, y_pred)), 4),
+        'mae': round(float(mae_ensemble), 2),
+        'mae_xgb': round(float(mae_xgb), 2),
+        'mae_hgb': round(float(mae_hgb), 2),
+        'weight_xgb': round(w_xgb, 4),
+        'weight_hgb': round(w_hgb, 4),
+        'rmse': round(float(np.sqrt(mean_squared_error(y_test, pred_ensemble))), 2),
+        'r2': round(float(r2_ensemble), 4),
         'n_train': int(len(X_train)),
         'n_test': int(len(X_test)),
-        'feature_cols': available
+        'feature_cols': available,
+        'ensemble': True,
     }
 
     os.makedirs(MODEL_DIR, exist_ok=True)
@@ -115,4 +147,12 @@ def predict_hourly(model, features_df):
     for c in missing:
         features_df[c] = 0
     X = features_df[feature_cols].values
+
+    if isinstance(model, dict) and 'xgb' in model:
+        pred_xgb = model['xgb'].predict(X)
+        pred_hgb = model['hgb'].predict(X)
+        w_xgb = model.get('weight_xgb', 0.6)
+        w_hgb = model.get('weight_hgb', 0.4)
+        return pred_xgb * w_xgb + pred_hgb * w_hgb
+
     return model.predict(X)

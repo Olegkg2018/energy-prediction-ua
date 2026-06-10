@@ -29,6 +29,28 @@ def load_oree_prices():
     except Exception:
         return None
 
+def load_csv_prices():
+    if not os.path.exists(PRICES_FILE):
+        return None
+    try:
+        df = pd.read_csv(PRICES_FILE)
+        hour_cols = [c for c in df.columns if c != 'date']
+        melted = df.melt(id_vars=['date'], var_name='hour', value_name='price')
+        melted['hour'] = pd.to_numeric(melted['hour'], errors='coerce')
+        melted['price'] = pd.to_numeric(melted['price'], errors='coerce')
+        melted.dropna(subset=['hour', 'price'], inplace=True)
+        melted['hour'] = melted['hour'].astype(int)
+        melted['date'] = melted['date'].astype(str).str.strip()
+        if '.' in str(melted['date'].iloc[0]):
+            melted['datetime'] = pd.to_datetime(melted['date'] + ' ' + melted['hour'].astype(str) + ':00:00', dayfirst=True, errors='coerce')
+        else:
+            melted['datetime'] = pd.to_datetime(melted['date'] + ' ' + melted['hour'].astype(str) + ':00:00', errors='coerce')
+        melted.dropna(subset=['datetime'], inplace=True)
+        melted['date'] = pd.to_datetime(melted['datetime']).dt.strftime('%Y-%m-%d')
+        return melted[['datetime', 'date', 'hour', 'price']]
+    except Exception:
+        return None
+
 def generate_synthetic_weather_for_range(start_date, end_date):
     np.random.seed(42)
     rows = []
@@ -115,7 +137,8 @@ def generate_synthetic_genmix_for_range(start_year, end_year):
         start = datetime(year, 1, 1)
         end = datetime(year, 12, 31, 23)
         ts = start
-        year_solar_mult = 1.0 + max(0, year - 2021) * 0.5
+        year_solar_mult = 1.0 + max(0, year - 2021) * 0.6
+        year_solar_base_mw = 2500 + max(0, year - 2022) * 1200
         nuclear_base = 4500 if year >= 2024 else 7500
         while ts <= end:
             hour = ts.hour
@@ -130,7 +153,8 @@ def generate_synthetic_genmix_for_range(start_year, end_year):
             solar = 0
             if 6 <= hour <= 19:
                 hour_factor = np.sin(np.pi * (hour - 6) / 13)
-                solar = np.random.normal(2500 * year_solar_mult if is_summer else 1500 * year_solar_mult, 500) * max(0, hour_factor)
+                solar_base_hour = year_solar_base_mw if is_summer else year_solar_base_mw * 0.6
+                solar = np.random.normal(solar_base_hour * year_solar_mult, 500) * max(0, hour_factor)
                 solar += np.random.normal(0, 200)
             wind = abs(np.random.normal(800, 300)) * (1.3 if hour >= 22 or hour <= 4 else 1.0)
             other_res = abs(np.random.normal(200, 50))
@@ -191,8 +215,17 @@ def get_combined_dataset():
         except Exception:
             pass
 
-    prices = load_oree_prices()
-    if prices is None or len(prices) < 1000:
+    csv_prices = load_csv_prices()
+    oree_prices = load_oree_prices()
+
+    if csv_prices is not None and oree_prices is not None:
+        csv_clean = csv_prices[~csv_prices['datetime'].isin(oree_prices['datetime'])]
+        prices = pd.concat([csv_clean, oree_prices], ignore_index=True)
+    elif csv_prices is not None:
+        prices = csv_prices
+    elif oree_prices is not None and len(oree_prices) >= 1000:
+        prices = oree_prices
+    else:
         from collectors.oree import get_sample_prices
         prices = get_sample_prices(365)
 
@@ -234,6 +267,7 @@ def get_combined_dataset():
     merged = build_features(merged)
     merged.sort_values('datetime', inplace=True)
     merged.reset_index(drop=True, inplace=True)
+
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
         merged.to_feather(CACHE_FILE)
