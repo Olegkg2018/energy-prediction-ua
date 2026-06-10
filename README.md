@@ -5,19 +5,23 @@ XGBoost модель + PuLP оптимізація батареї + Flask веб
 
 ## Можливості
 
-- **Прогноз цін РДН** на добу наперед (XGBoost, 21 фіча)
-- **Оптимізація батареї** 1 МВт / 4 МВт·год (PuLP лінійне програмування)
-- **Реальні дані OREE** — РДН та ВДР (внутрішньодобовий ринок)
+- **Прогноз цін РДН** на добу наперед (XGBoost, 23 фічі)
+- **Оптимізація батареї** 1 МВт / 4 МВт·год (PuLP, до 2 циклів/добу для весняно-осінньої duck curve)
+- **Реальні дані OREE** — РДН та ВДР (внутрішньодобовий ринок), 24:00 → наступний день
 - **Стан ОЕС** — генерація по типах через ENTSO-E Transparency (АЕС, ТЕС, ГЕС, СЕС, ВЕС)
 - **Індекс ВДЕ** — погода в 5 зонах генерації (Південь, Запоріжжя, Дніпро, Одеса, Карпати), сонячний та вітровий індекс
-- **Ручні фактори** — відключення АЕС, ризик прильотів
-- **Дашборд** — статистика, графіки, аналіз факторів
+- **Прогноз погоди** — OpenWeather OneCall 3.0 (кешування на 3 год), інтерполяція 3→1 год для прогнозу
+- **Згладжування цін** — ковзне середнє ±2 год для усунення зубців у прогнозі
+- **Ручні фактори** — відключення АЕС, ризик прильотів (зберігаються в JSON)
+- **Дашборд** — статистика, графіки, аналіз факторів, порівняння прогнозу з реальними цінами OREE
+- **Перетренування моделі** — через `/train` (POST) з очищенням кешу
 
-## Фічі моделі (21 ознака)
+## Фічі моделі (23 ознаки)
 
-- Базові: `hour`, `dayofweek`, `month`, `day`, `is_weekend`, `is_holiday`, `sin_hour`, `cos_hour`, `sin_month`, `cos_month`, `temperature`
+- Базові: `hour`, `dayofweek`, `month`, `day`, `is_weekend`, `is_holiday`, `sin_hour`, `cos_hour`, `sin_month`, `cos_month`, `temperature`, `solar_radiation`
 - ВДЕ: `solar_index`, `wind_index`, `renewable_index`
 - ОЕС: `nuclear_share`, `thermal_share`, `hydro_share`, `solar_share`, `wind_share`, `res_share`, `total_gen_mw`
+- Тренд: `days_since_epoch`
 
 ## Швидкий старт
 
@@ -58,32 +62,49 @@ python app.py
 |----------|------|
 | `/` | Дашборд |
 | `/predict` | Прогноз + оптимізація |
-| `/api/predict?date=YYYY-MM-DD` | Прогноз цін |
-| `/api/optimize?date=YYYY-MM-DD` | Оптимізація батареї |
-| `/api/factors?date=YYYY-MM-DD` | Аналіз факторів |
-| `/api/generation_mix` | Стан ОЕС |
-| `/api/renewable_index` | Індекс ВДЕ по зонах |
-| `/api/oree_prices` | Ціни РДН |
-| `/api/idm_prices` | Ціни ВДР |
+| `/about` | Інформація про проект |
+| `/api/stats` | Статистика моделі (MAE, R², ознаки) |
+| `/api/model_info` | Інформація про модель |
+| `/api/predict?date=YYYY-MM-DD` | Прогноз цін на добу (24 год) |
+| `/api/predict_multi?days=3` | Прогноз на декілька діб |
+| `/api/optimize?date=YYYY-MM-DD&capacity=4&power=1` | Оптимізація батареї (PuLP, до 2 циклів) |
+| `/api/factors?date=YYYY-MM-DD` | Аналіз факторів впливу на ціну |
+| `/api/factors/manual` | GET/POST ручних факторів (nuclear_outage, missile_risk) |
+| `/api/generation_mix` | Поточна генерація ОЕС по типах |
+| `/api/generation_timeseries` | Часовий ряд генерації за 7 днів |
+| `/api/renewable_index` | Індекс ВДЕ по 5 зонах + прогноз |
+| `/api/oree_prices` | Історичні ціни РДН (60 днів) |
+| `/api/idm_prices` | Ціни ВДР (60 днів) |
+| `/api/live_prices` | Останні 48 год OREE |
+| `/api/forecast_weather` | Прогноз погоди на 3 дні |
+| `/api/historical_surplus` | Історичний надлишок генерації |
+| `/api/refresh_data` | Примусове оновлення всіх кешів |
+| `/train` (POST) | Перетренувати модель |
 
 ## Архітектура
 
 ```
 energy-prediction-ua/
-├── app.py                     # Flask сервер
+├── app.py                     # Flask сервер (20+ REST роутів)
 ├── collectors/
-│   ├── oree.py                # Парсинг OREE (РДН + ВДР)
-│   ├── weather.py             # OpenWeather API
-│   ├── renewable_index.py     # Індекси ВДЕ (5 зон)
-│   └── generation_mix.py      # ENTSO-E генерація ОЕС
+│   ├── oree.py                # Парсинг OREE (РДН + ВДР), 24:00→наст. день
+│   ├── weather.py             # OpenWeather OneCall 3.0 + кеш + інтерполяція
+│   ├── renewable_index.py     # Індекси ВДЕ (5 зон + прогноз)
+│   └── generation_mix.py      # ENTSO-E / Ukrenergo генерація ОЕС
 ├── model/
-│   ├── train.py               # XGBoost навчання
-│   └── predict.py             # Прогноз
+│   ├── train.py               # XGBoost навчання (23 фічі)
+│   ├── predict.py             # Прогноз на добу + згладжування ±2 год
+│   └── model.pkl              # Натренована модель
 ├── optimizer/
-│   └── scheduler.py           # PuLP батарея
+│   └── scheduler.py           # PuLP батарея (до 2 циклів/добу)
 ├── data/
-│   └── loader.py              # Завантаження + feature engineering
-├── templates/                 # Jinja2 + Plotly
+│   ├── loader.py              # Завантаження + feature engineering
+│   ├── prices_2025.csv        # Історичні ціни (статика)
+│   ├── oree_prices.feather    # OREE кеш
+│   ├── cache.feather          # Об'єднаний датасет
+│   └── forecast_cache.json    # Погодний кеш
+├── templates/                 # Jinja2 + Plotly (дашборд, прогноз, about)
+├── static/                    # CSS/JS
 ├── Dockerfile
 └── docker-compose.yml
 ```
