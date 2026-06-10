@@ -183,6 +183,13 @@ def get_cached_forecast():
 def get_forecast():
     cached = get_cached_forecast()
     if cached is not None:
+        rows = len(cached)
+        if rows > 0 and 'hour' in cached.columns:
+            unique_hours = cached['hour'].nunique()
+        else:
+            unique_hours = 0
+        if unique_hours < 18:
+            return interpolate_forecast(cached)
         return cached
     return fetch_forecast()
 
