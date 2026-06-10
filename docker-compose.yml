@@ -8,8 +8,5 @@ services:
       - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY:-demo_key}
       - ENTSOE_API_KEY=${ENTSOE_API_KEY:-}
     volumes:
-      - energy_data:/app/data
+      - ./data:/app/data
     restart: unless-stopped
-
-volumes:
-  energy_data:
