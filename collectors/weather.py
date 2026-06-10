@@ -72,6 +72,7 @@ def parse_openweather_response(data):
             'date': dt.strftime('%Y-%m-%d'),
             'hour': dt.hour,
             'temperature': temp,
+            'humidity': d.get('humidity', 50),
             'clouds': clouds,
             'wind_speed': wind,
             'weather_id': weather_id,
@@ -93,6 +94,7 @@ def parse_25_forecast(data):
             'date': dt.strftime('%Y-%m-%d'),
             'hour': dt.hour,
             'temperature': temp,
+            'humidity': item['main'].get('humidity', 50),
             'clouds': clouds,
             'wind_speed': wind,
             'weather_id': weather_id,
@@ -112,7 +114,7 @@ def interpolate_forecast(df):
     )})
     full['hour'] = full['datetime'].dt.hour
     full['date'] = full['datetime'].dt.strftime('%Y-%m-%d')
-    for col in ['temperature', 'clouds', 'wind_speed', 'solar_radiation', 'weather_id']:
+    for col in ['temperature', 'humidity', 'clouds', 'wind_speed', 'solar_radiation', 'weather_id']:
         if col in df.columns:
             full[col] = full[['datetime']].merge(
                 df[['datetime', col]], on='datetime', how='left'
@@ -149,6 +151,7 @@ def generate_synthetic_forecast():
         temp = round(base_temp + daily_variation + noise, 1)
         clouds = int(np.clip(np.random.normal(50, 25), 0, 100))
         wind = round(np.random.exponential(3), 1)
+        humidity = int(np.clip(np.random.normal(65 - 10 * np.sin(np.pi * (hour - 6) / 12), 15), 30, 95))
         weather_id = 800 if clouds < 30 else (802 if clouds < 70 else 804)
         solar_radiation = estimate_solar_radiation(dt, clouds)
         rows.append({
@@ -156,6 +159,7 @@ def generate_synthetic_forecast():
             'date': dt.strftime('%Y-%m-%d'),
             'hour': hour,
             'temperature': temp,
+            'humidity': humidity,
             'clouds': clouds,
             'wind_speed': wind,
             'weather_id': weather_id,
@@ -216,5 +220,5 @@ def get_forecast_for_dates(days_ahead=2):
     now = datetime.now()
     today = now.strftime('%Y-%m-%d')
     target_dates = [(now + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days_ahead)]
-    result = df[df['date'].isin(target_dates)][['date', 'hour', 'temperature', 'clouds', 'wind_speed', 'solar_radiation']].to_dict('records')
+    result = df[df['date'].isin(target_dates)][['date', 'hour', 'temperature', 'humidity', 'clouds', 'wind_speed', 'solar_radiation']].to_dict('records')
     return result

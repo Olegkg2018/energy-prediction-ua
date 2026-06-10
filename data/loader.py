@@ -75,11 +75,13 @@ def generate_synthetic_weather_for_range(start_date, end_date):
             clear_sky = 1000 * elevation
             cloud_factor = 1 - (clouds / 100) * 0.75
             solar = max(0, clear_sky * cloud_factor)
+        humidity = int(np.clip(np.random.normal(70 - 15 * np.sin(np.pi * (hour - 6) / 12), 15), 30, 95))
         rows.append({
             'datetime': ts,
             'date': ts.strftime('%Y-%m-%d'),
             'hour': hour,
             'temperature': temp,
+            'humidity': humidity,
             'clouds': clouds,
             'solar_radiation': round(solar, 1),
         })
@@ -196,6 +198,10 @@ def build_features(df):
     df['days_since_epoch'] = _days_since_epoch(dt)
     if 'solar_radiation' not in df.columns:
         df['solar_radiation'] = 0
+    if 'humidity' not in df.columns:
+        df['humidity'] = 50
+    if 'is_solar_dip_hour' not in df.columns:
+        df['is_solar_dip_hour'] = ((df['hour'] >= 10) & (df['hour'] <= 15)).astype(int)
     for col in ['solar_index', 'wind_index', 'renewable_index',
                 'nuclear_share', 'thermal_share', 'hydro_share',
                 'solar_share', 'wind_share', 'res_share',
@@ -238,6 +244,8 @@ def get_combined_dataset():
     weather = generate_synthetic_weather_for_range(price_min_date, price_max_date)
     merged = pd.merge(prices, weather, on=['datetime', 'date', 'hour'], how='left')
     merged['temperature'] = merged['temperature'].interpolate(limit_direction='both')
+    if 'humidity' in merged.columns:
+        merged['humidity'] = merged['humidity'].interpolate(limit_direction='both')
 
     oree_years = set(pd.to_datetime(prices['datetime']).dt.year)
     renewable = generate_synthetic_renewable_for_range(min(oree_years), max(oree_years))
@@ -267,10 +275,11 @@ def get_combined_dataset():
     merged = build_features(merged)
     merged['solar_irradiance'] = merged['solar_share'] * merged.get('solar_radiation', 0)
     merged['solar_intensity'] = merged['solar_share'] * merged['sin_hour'].clip(lower=0)
+    merged['is_solar_dip_hour'] = ((merged['hour'] >= 10) & (merged['hour'] <= 15)).astype(int)
     year_col = pd.to_datetime(merged['datetime']).dt.year
     csv_mask = year_col == 2025
-    merged.loc[csv_mask & (merged['solar_share'] > 0.35), 'price'] = \
-        merged['price'] * (1 - merged['solar_share'] * 0.7).clip(lower=0.05)
+    merged.loc[csv_mask, 'price'] = \
+        merged['price'] * (1 - merged['solar_share'] * 1.0).clip(lower=0.05)
     merged['price'] = merged['price'].clip(lower=0.01)
     merged.sort_values('datetime', inplace=True)
     merged.reset_index(drop=True, inplace=True)

@@ -26,6 +26,7 @@ def prepare_prediction_features(weather_forecast):
     df['solar_radiation'] = df.get('solar_radiation', 0)
     df['clouds'] = df.get('clouds', 50)
     df['wind_speed'] = df.get('wind_speed', 0)
+    df['humidity'] = df.get('humidity', 50)
 
     # Helper: merge and overwrite existing columns with same names
     def merge_overwrite(df, right, on, columns):
@@ -125,6 +126,7 @@ def _generate_synthetic_day(target_date, use_existing_as_ref=False):
         temp = round(base_temp + daily_variation + noise, 1)
         clouds = int(np.clip(rng.normal(50, 25), 0, 100))
         wind = round(np.random.exponential(3), 1)
+        humidity = int(np.clip(rng.normal(65 - 10 * np.sin(np.pi * (hour - 6) / 12), 15), 30, 95))
         solar_radiation = 0
         if 5 <= hour <= 21:
             elevation = np.sin(np.radians(50)) * np.sin(np.radians(23.45 * np.sin(np.radians(360/365 * (month * 30.5 - 81))))) + \
@@ -136,6 +138,7 @@ def _generate_synthetic_day(target_date, use_existing_as_ref=False):
             'date': target_date,
             'hour': hour,
             'temperature': temp,
+            'humidity': humidity,
             'clouds': clouds,
             'wind_speed': wind,
             'solar_radiation': solar_radiation,
@@ -199,13 +202,13 @@ def predict_next_day_prices(target_date=None):
             'hour': f"{hour:02d}:00",
             'hour_num': hour,
             'price': max(price, 0.01),
-            'temperature': round(float(row.get('temperature', 15)), 1),
-            'clouds': int(row.get('clouds', 50)),
+            'temperature': round(float(row.get('temperature', 15) if pd.notna(row.get('temperature', 15)) else 15), 1),
+            'humidity': int(row.get('humidity', 50) if pd.notna(row.get('humidity', 50)) else 50),
+            'clouds': int(row.get('clouds', 50) if pd.notna(row.get('clouds', 50)) else 50),
             'wind_speed': round(float(row.get('wind_speed', 0)), 1),
             'solar_radiation': round(float(row.get('solar_radiation', 0)), 1)
         })
     results.sort(key=lambda x: x['hour_num'])
-    _smooth_prices(results)
     return results
 
 def predict_with_dates(dates):
@@ -236,7 +239,6 @@ def predict_with_dates(dates):
                 'temperature': round(float(row.get('temperature', 15)), 1)
             })
         results = sorted(results, key=lambda x: x['hour'])
-        _smooth_prices(results)
         all_predictions[target_date] = results
     return all_predictions
 

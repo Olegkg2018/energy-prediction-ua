@@ -282,7 +282,7 @@ function renderRealComparison(predictions, date) {
 function renderPredictionTable(predictions) {
     let html = `<table><thead><tr>
         <th>Година</th><th>Ціна, грн</th><th>Темп, °C</th>
-        <th>Хмарність, %</th><th>Вітер, м/с</th><th>Сонц. рад., Вт/м²</th>
+        <th>Вологість, %</th><th>Хмарність, %</th><th>Вітер, м/с</th><th>Сонц. рад., Вт/м²</th>
     </tr></thead><tbody>`;
     for (const p of predictions) {
         const color = p.price < 200 ? '#28a745' : p.price > 2000 ? '#dc3545' : '';
@@ -290,6 +290,7 @@ function renderPredictionTable(predictions) {
             <td>${p.hour}</td>
             <td style="color:${color};font-weight:bold">${p.price}</td>
             <td>${p.temperature || '-'}</td>
+            <td>${p.humidity || '-'}</td>
             <td>${p.clouds || '-'}</td>
             <td>${p.wind_speed || '-'}</td>
             <td>${p.solar_radiation || '-'}</td>

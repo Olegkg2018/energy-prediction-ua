@@ -25,12 +25,14 @@ def train_model(data_df, force=False):
         'is_weekend', 'is_holiday',
         'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
         'temperature',
+        'humidity',
         'solar_radiation',
         'solar_index', 'wind_index', 'renewable_index',
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
         'days_since_epoch',
         'solar_irradiance', 'solar_intensity',
+        'is_solar_dip_hour',
     ]
 
     available = [c for c in feature_cols if c in data_df.columns]
@@ -42,7 +44,7 @@ def train_model(data_df, force=False):
     y = df['price'].values
 
     df['_year'] = pd.to_datetime(df['datetime']).dt.year
-    sample_weight = np.where(df['_year'] >= 2026, 3.0, 1.0)
+    sample_weight = np.where(df['_year'] >= 2026, 5.0, 1.0)
     df.drop(columns=['_year'], inplace=True)
 
     X_train, X_test, y_train, y_test, w_train, _ = train_test_split(
@@ -141,12 +143,14 @@ def predict_hourly(model, features_df):
         'is_weekend', 'is_holiday',
         'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
         'temperature',
+        'humidity',
         'solar_radiation',
         'solar_index', 'wind_index', 'renewable_index',
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
         'days_since_epoch',
         'solar_irradiance', 'solar_intensity',
+        'is_solar_dip_hour',
     ]
     available = [c for c in feature_cols if c in features_df.columns]
     missing = [c for c in feature_cols if c not in features_df.columns]

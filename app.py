@@ -108,13 +108,52 @@ def api_predict():
 @app.route('/api/predict_multi')
 def api_predict_multi():
     dates_str = request.args.get('dates', '')
-    if not dates_str:
-        return jsonify({'success': False, 'error': 'No dates provided'})
-    dates = dates_str.split(',')
+    days = request.args.get('days', 0, type=int)
+    if days > 0:
+        dates = [(datetime.now() + timedelta(days=i + 1)).strftime('%Y-%m-%d') for i in range(days)]
+    elif dates_str:
+        dates = dates_str.split(',')
+    else:
+        return jsonify({'success': False, 'error': 'Provide dates or days'})
     results = predict_with_dates(dates)
     if results is None:
         return jsonify({'success': False, 'error': 'Model not trained'})
     return jsonify({'success': True, 'predictions': results})
+
+@app.route('/api/forward_curve')
+def api_forward_curve():
+    days = request.args.get('days', 7, type=int)
+    if days < 1 or days > 90:
+        return jsonify({'success': False, 'error': 'days must be 1-90'})
+    dates = [(datetime.now() + timedelta(days=i + 1)).strftime('%Y-%m-%d') for i in range(days)]
+    results = predict_with_dates(dates)
+    if results is None:
+        return jsonify({'success': False, 'error': 'Model not trained'})
+
+    flat = []
+    for date, preds in results.items():
+        for p in preds:
+            flat.append({'date': date, 'hour': p['hour'], 'price': p['price'],
+                         'temperature': p.get('temperature'),
+                         'humidity': p.get('humidity'),
+                         'clouds': p.get('clouds'),
+                         'wind_speed': p.get('wind_speed'),
+                         'solar_radiation': p.get('solar_radiation')})
+
+    daily_avg = {}
+    for date, preds in results.items():
+        prices = [p['price'] for p in preds]
+        daily_avg[date] = round(sum(prices) / len(prices), 2) if prices else 0
+
+    return jsonify({
+        'success': True,
+        'curve': flat,
+        'daily_avg': daily_avg,
+        'days': days,
+        'min_price': round(min(p['price'] for p in flat), 2) if flat else 0,
+        'max_price': round(max(p['price'] for p in flat), 2) if flat else 0,
+        'avg_price': round(sum(p['price'] for p in flat) / len(flat), 2) if flat else 0,
+    })
 
 @app.route('/api/optimize')
 def api_optimize():
@@ -353,6 +392,65 @@ def api_manual_factors():
         save_manual_factors(current)
         return jsonify({'success': True, 'factors': current})
     return jsonify({'success': True, 'factors': load_manual_factors()})
+
+@app.route('/api/position_value')
+def api_position_value():
+    buy_price = request.args.get('buy', 0, type=float)
+    sell_price = request.args.get('sell', 0, type=float)
+    volume = request.args.get('volume', 1, type=float)
+    days = request.args.get('days', 1, type=int)
+    if days < 1 or days > 30:
+        return jsonify({'success': False, 'error': 'days must be 1-30'})
+
+    flat = []
+    for i in range(days):
+        date = (datetime.now() + timedelta(days=i + 1)).strftime('%Y-%m-%d')
+        preds = predict_next_day_prices(target_date=date)
+        if preds is None:
+            continue
+        for p in preds:
+            flat.append({'date': date, 'hour': p['hour'], 'hour_num': p['hour_num'], 'price': p['price']})
+
+    if not flat:
+        return jsonify({'success': False, 'error': 'No predictions available'})
+
+    total_volume = volume * 24 * days
+    if buy_price > 0:
+        buy_cost = buy_price * total_volume
+        market_value = sum(f['price'] for f in flat)
+        buy_pnl = round(market_value - buy_cost, 2)
+        buy_pnl_pct = round((market_value / buy_cost - 1) * 100, 2) if buy_cost > 0 else 0
+    else:
+        buy_pnl = 0
+        buy_pnl_pct = 0
+
+    if sell_price > 0:
+        sell_revenue = sell_price * total_volume
+        market_cost = sum(f['price'] for f in flat)
+        sell_pnl = round(sell_revenue - market_cost, 2)
+        sell_pnl_pct = round((sell_revenue / market_cost - 1) * 100, 2) if market_cost > 0 else 0
+    else:
+        sell_pnl = 0
+        sell_pnl_pct = 0
+
+    return jsonify({
+        'success': True,
+        'position': {
+            'buy_price_uah': buy_price,
+            'sell_price_uah': sell_price,
+            'volume_mwh': total_volume,
+            'days': days,
+        },
+        'pnl': {
+            'buy_pnl_uah': buy_pnl,
+            'buy_pnl_pct': buy_pnl_pct,
+            'sell_pnl_uah': sell_pnl,
+            'sell_pnl_pct': sell_pnl_pct,
+            'total_pnl_uah': round(buy_pnl + sell_pnl, 2),
+        },
+        'avg_forward_price': round(sum(f['price'] for f in flat) / len(flat), 2) if flat else 0,
+        'flat': flat,
+    })
 
 @app.route('/api/historical_surplus')
 def api_historical_surplus():
