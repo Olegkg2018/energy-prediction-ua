@@ -140,6 +140,24 @@ def _generate_synthetic_day(target_date, use_existing_as_ref=False):
         })
     return pd.DataFrame(rows)
 
+def _smooth_prices(results):
+    prices = [r['price'] for r in results]
+    n = len(prices)
+    smoothed = []
+    for i in range(n):
+        w = prices[i]
+        t = 1
+        for d in [1, 2]:
+            if i - d >= 0:
+                w += prices[i - d] * (1 / d)
+                t += 1 / d
+            if i + d < n:
+                w += prices[i + d] * (1 / d)
+                t += 1 / d
+        smoothed.append(w / t)
+    for i, r in enumerate(results):
+        r['price'] = round(smoothed[i], 2)
+
 def predict_next_day_prices(target_date=None):
     if target_date is None:
         target_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
@@ -176,13 +194,14 @@ def predict_next_day_prices(target_date=None):
         results.append({
             'hour': f"{hour:02d}:00",
             'hour_num': hour,
-            'price': round(max(price, 0.01), 2),
+            'price': max(price, 0.01),
             'temperature': round(float(row.get('temperature', 15)), 1),
             'clouds': int(row.get('clouds', 50)),
             'wind_speed': round(float(row.get('wind_speed', 0)), 1),
             'solar_radiation': round(float(row.get('solar_radiation', 0)), 1)
         })
     results.sort(key=lambda x: x['hour_num'])
+    _smooth_prices(results)
     return results
 
 def predict_with_dates(dates):
@@ -209,10 +228,12 @@ def predict_with_dates(dates):
             price = float(preds[idx]) if preds is not None and idx < len(preds) else 0
             results.append({
                 'hour': f"{int(row['hour']):02d}:00",
-                'price': round(max(price, 0.01), 2),
+                'price': max(price, 0.01),
                 'temperature': round(float(row.get('temperature', 15)), 1)
             })
-        all_predictions[target_date] = sorted(results, key=lambda x: x['hour'])
+        results = sorted(results, key=lambda x: x['hour'])
+        _smooth_prices(results)
+        all_predictions[target_date] = results
     return all_predictions
 
 def get_model_stats():
