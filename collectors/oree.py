@@ -49,7 +49,12 @@ def fetch_month_prices(year, month, market='DAM', zone='IPS'):
                     melted['hour'] = pd.to_numeric(melted['hour'], errors='coerce')
                     melted['price'] = pd.to_numeric(melted['price'], errors='coerce')
                     melted.dropna(subset=['hour', 'price'], inplace=True)
-                    melted['hour'] = melted['hour'].astype(int) % 24
+                    melted['hour'] = melted['hour'].astype(int)
+                    mask_24 = melted['hour'] == 24
+                    melted.loc[mask_24, 'hour'] = 0
+                    melted.loc[mask_24, 'date'] = (
+                        pd.to_datetime(melted.loc[mask_24, 'date'], dayfirst=True) + pd.Timedelta(days=1)
+                    ).dt.strftime('%d.%m.%Y')
                     melted['date'] = melted['date'].astype(str).str.strip()
                     if '.' in str(melted['date'].iloc[0]):
                         melted['datetime'] = pd.to_datetime(melted['date'] + ' ' + melted['hour'].astype(str) + ':00:00', dayfirst=True, errors='coerce')

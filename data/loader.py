@@ -23,7 +23,6 @@ def load_oree_prices():
     try:
         df = pd.read_feather(OREE_CACHE)
         df['hour'] = pd.to_numeric(df['hour'], errors='coerce').astype(int)
-        df['hour'] = df['hour'] % 24
         df['datetime'] = pd.to_datetime(df['datetime'])
         df['date'] = pd.to_datetime(df['datetime']).dt.strftime('%Y-%m-%d')
         return df[['datetime', 'date', 'hour', 'price']]
