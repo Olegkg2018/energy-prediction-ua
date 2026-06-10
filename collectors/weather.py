@@ -46,7 +46,10 @@ def fetch_forecast():
         resp = requests.get(url_25, params=params, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
-            return parse_25_forecast(data)
+            df = parse_25_forecast(data)
+            if df is not None and len(df) > 0:
+                return interpolate_forecast(df)
+            return df
     except Exception:
         pass
     return generate_synthetic_forecast()
@@ -92,6 +95,26 @@ def parse_25_forecast(data):
             'solar_radiation': solar_radiation
         })
     return pd.DataFrame(rows)
+
+def interpolate_forecast(df):
+    if df is None or len(df) == 0:
+        return df
+    df = df.copy()
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    full = pd.DataFrame({'datetime': pd.date_range(
+        df['datetime'].min().floor('h'),
+        df['datetime'].max().ceil('h') - pd.Timedelta(hours=1),
+        freq='h'
+    )})
+    full['hour'] = full['datetime'].dt.hour
+    full['date'] = full['datetime'].dt.strftime('%Y-%m-%d')
+    for col in ['temperature', 'clouds', 'wind_speed', 'solar_radiation', 'weather_id']:
+        if col in df.columns:
+            full[col] = full[['datetime']].merge(
+                df[['datetime', col]], on='datetime', how='left'
+            )[col]
+            full[col] = full[col].interpolate(method='linear').bfill().ffill()
+    return full
 
 def estimate_solar_radiation(dt, clouds):
     hour = dt.hour
