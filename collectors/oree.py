@@ -7,6 +7,8 @@ import os
 import re
 import calendar
 import io
+import time
+import random
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 OREE_CACHE = os.path.join(CACHE_DIR, 'oree_prices.feather')
@@ -23,45 +25,45 @@ def fetch_month_prices(year, month, market='DAM', zone='IPS'):
         'market': market,
         'zone': zone
     }
-    try:
-        resp = requests.post(url, data=data, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        result = resp.json()
-        html_content = result.get('content', '')
-        if not html_content:
-            return None
-        if not html_content.strip().startswith('<'):
-            return None
-        tables = pd.read_html(io.StringIO(html_content))
-        if not tables:
-            return None
-        df = tables[0]
-        date_col = None
-        for col in df.columns:
-            if 'дат' in str(col).lower():
-                date_col = col
-                break
-        if date_col is None:
-            date_col = df.columns[0]
-        df.rename(columns={date_col: 'date'}, inplace=True)
-        hour_cols = [c for c in df.columns if c != 'date']
-        melted = df.melt(id_vars=['date'], var_name='hour', value_name='price')
-        melted['hour'] = melted['hour'].astype(str).str.extract(r'(\d+)')
-        melted['hour'] = pd.to_numeric(melted['hour'], errors='coerce')
-        melted['price'] = pd.to_numeric(melted['price'], errors='coerce')
-        melted.dropna(subset=['hour', 'price'], inplace=True)
-        melted['hour'] = melted['hour'].astype(int) % 24
-        melted['date'] = melted['date'].astype(str).str.strip()
-        if '.' in str(melted['date'].iloc[0]):
-            melted['datetime'] = pd.to_datetime(melted['date'] + ' ' + melted['hour'].astype(str) + ':00:00', dayfirst=True, errors='coerce')
-        else:
-            melted['datetime'] = pd.to_datetime(melted['date'] + ' ' + melted['hour'].astype(str) + ':00:00', errors='coerce')
-        melted.dropna(subset=['datetime'], inplace=True)
-        melted['date'] = pd.to_datetime(melted['datetime']).dt.strftime('%Y-%m-%d')
-        return melted[['datetime', 'date', 'hour', 'price']]
-    except Exception as e:
-        print(f"[OREE] Month fetch error ({year}-{month}): {e}")
-        return None
+    for attempt in range(2):
+        try:
+            resp = requests.post(url, data=data, headers=HEADERS, timeout=15)
+            resp.raise_for_status()
+            result = resp.json()
+            html_content = result.get('content', '')
+            if html_content and html_content.strip().startswith('<'):
+                tables = pd.read_html(io.StringIO(html_content))
+                if tables:
+                    df = tables[0]
+                    date_col = None
+                    for col in df.columns:
+                        if 'дат' in str(col).lower():
+                            date_col = col
+                            break
+                    if date_col is None:
+                        date_col = df.columns[0]
+                    df.rename(columns={date_col: 'date'}, inplace=True)
+                    hour_cols = [c for c in df.columns if c != 'date']
+                    melted = df.melt(id_vars=['date'], var_name='hour', value_name='price')
+                    melted['hour'] = melted['hour'].astype(str).str.extract(r'(\d+)')
+                    melted['hour'] = pd.to_numeric(melted['hour'], errors='coerce')
+                    melted['price'] = pd.to_numeric(melted['price'], errors='coerce')
+                    melted.dropna(subset=['hour', 'price'], inplace=True)
+                    melted['hour'] = melted['hour'].astype(int) % 24
+                    melted['date'] = melted['date'].astype(str).str.strip()
+                    if '.' in str(melted['date'].iloc[0]):
+                        melted['datetime'] = pd.to_datetime(melted['date'] + ' ' + melted['hour'].astype(str) + ':00:00', dayfirst=True, errors='coerce')
+                    else:
+                        melted['datetime'] = pd.to_datetime(melted['date'] + ' ' + melted['hour'].astype(str) + ':00:00', errors='coerce')
+                    melted.dropna(subset=['datetime'], inplace=True)
+                    melted['date'] = pd.to_datetime(melted['datetime']).dt.strftime('%Y-%m-%d')
+                    return melted[['datetime', 'date', 'hour', 'price']]
+        except Exception:
+            if attempt == 0:
+                time.sleep(random.uniform(1, 2))
+            else:
+                pass
+    return None
 
 def generate_sample_prices(num_days=30):
     np.random.seed(42)
@@ -178,6 +180,7 @@ def scrape_oree_prices(date_from=None, date_to=None):
             df = fetch_month_prices(year, month)
             if df is not None and len(df) > 0:
                 all_data.append(df)
+            time.sleep(random.uniform(0.5, 1.5))
 
     if not all_data:
         return None
