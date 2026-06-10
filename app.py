@@ -73,6 +73,7 @@ def api_model_info():
 def train():
     force = request.json.get('force', True) if request.is_json else True
     try:
+        clear_cache()
         data = get_combined_dataset()
         model, metrics = train_model(data, force=force)
         if model is None:
