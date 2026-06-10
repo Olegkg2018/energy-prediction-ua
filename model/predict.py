@@ -104,6 +104,9 @@ def prepare_prediction_features(weather_forecast):
             df[c] = 0
         df[c] = df[c].fillna(0)
 
+    df['solar_irradiance'] = df['solar_share'] * df.get('solar_radiation', 0)
+    df['solar_intensity'] = df['solar_share'] * df['sin_hour'].clip(lower=0)
+
     return df
 
 def _generate_synthetic_day(target_date, use_existing_as_ref=False):

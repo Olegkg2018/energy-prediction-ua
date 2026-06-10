@@ -265,6 +265,13 @@ def get_combined_dataset():
         merged[c] = merged[c].fillna(0)
 
     merged = build_features(merged)
+    merged['solar_irradiance'] = merged['solar_share'] * merged.get('solar_radiation', 0)
+    merged['solar_intensity'] = merged['solar_share'] * merged['sin_hour'].clip(lower=0)
+    year_col = pd.to_datetime(merged['datetime']).dt.year
+    csv_mask = year_col == 2025
+    merged.loc[csv_mask & (merged['solar_share'] > 0.35), 'price'] = \
+        merged['price'] * (1 - merged['solar_share'] * 0.7).clip(lower=0.05)
+    merged['price'] = merged['price'].clip(lower=0.01)
     merged.sort_values('datetime', inplace=True)
     merged.reset_index(drop=True, inplace=True)
 

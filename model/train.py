@@ -30,6 +30,7 @@ def train_model(data_df, force=False):
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
         'days_since_epoch',
+        'solar_irradiance', 'solar_intensity',
     ]
 
     available = [c for c in feature_cols if c in data_df.columns]
@@ -40,8 +41,12 @@ def train_model(data_df, force=False):
     X = df[available].values
     y = df['price'].values
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.15, random_state=42, shuffle=True
+    df['_year'] = pd.to_datetime(df['datetime']).dt.year
+    sample_weight = np.where(df['_year'] >= 2026, 3.0, 1.0)
+    df.drop(columns=['_year'], inplace=True)
+
+    X_train, X_test, y_train, y_test, w_train, _ = train_test_split(
+        X, y, sample_weight, test_size=0.15, random_state=42, shuffle=True
     )
 
     xgb_model = xgb.XGBRegressor(
@@ -56,7 +61,7 @@ def train_model(data_df, force=False):
         random_state=42,
         n_jobs=-1
     )
-    xgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+    xgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], sample_weight=w_train, verbose=False)
 
     hgb_model = HistGradientBoostingRegressor(
         max_iter=300,
@@ -65,7 +70,7 @@ def train_model(data_df, force=False):
         min_samples_leaf=5,
         random_state=42,
     )
-    hgb_model.fit(X_train, y_train)
+    hgb_model.fit(X_train, y_train, sample_weight=w_train)
 
     pred_xgb = xgb_model.predict(X_test)
     pred_hgb = hgb_model.predict(X_test)
@@ -141,6 +146,7 @@ def predict_hourly(model, features_df):
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
         'days_since_epoch',
+        'solar_irradiance', 'solar_intensity',
     ]
     available = [c for c in feature_cols if c in features_df.columns]
     missing = [c for c in feature_cols if c not in features_df.columns]

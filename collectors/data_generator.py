@@ -37,14 +37,14 @@ def generate_price_for_day(date, base_price=1500):
             base *= 0.75
 
         if 10 <= h <= 15 and month in [4, 5, 6, 7, 8, 9]:
-            solar_dip = np.random.uniform(0.3, 0.6)
+            solar_dip = np.random.uniform(0.08, 0.35)
             base *= solar_dip
 
         noise = np.random.normal(0, base * 0.15)
         price = base + noise
 
-        if np.random.random() < 0.02 and 10 <= h <= 14 and month in [5, 6, 7]:
-            price = np.random.uniform(1, 50)
+        if np.random.random() < 0.05 and 10 <= h <= 15 and month in [5, 6, 7]:
+            price = np.random.uniform(1, 100)
 
         if np.random.random() < 0.01:
             price = np.random.uniform(3000, 6000)
