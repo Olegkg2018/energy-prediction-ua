@@ -53,19 +53,22 @@ def generate_synthetic_for_gap(start_date, end_date):
     ts = pd.Timestamp(start_date)
     end = pd.Timestamp(end_date)
     while ts <= end:
+        year = ts.year
         hour = ts.hour
         month = ts.month
         is_winter = month in [12, 1, 2]
         is_summer = month in [6, 7, 8]
-        nuclear = np.random.normal(7500, 300)
-        thermal = np.random.normal(3000 if is_winter else 2000, 400)
+        year_solar_mult = 1.0 + max(0, year - 2021) * 0.5
+        nuclear_base = 4500 if year >= 2024 else 7500
+        nuclear = np.random.normal(nuclear_base, 300)
+        thermal = np.random.normal(2000 if is_winter else 1200, 400)
         if 8 <= hour <= 11 or 17 <= hour <= 21:
             thermal += 500
-        hydro = np.random.normal(800, 150)
+        hydro = np.random.normal(600, 150)
         solar = 0
         if 6 <= hour <= 19:
             hour_factor = np.sin(np.pi * (hour - 6) / 13)
-            solar = np.random.normal(2500 if is_summer else 1500, 500) * max(0, hour_factor)
+            solar = np.random.normal(2500 * year_solar_mult if is_summer else 1500 * year_solar_mult, 500) * max(0, hour_factor)
             solar += np.random.normal(0, 200)
         wind = abs(np.random.normal(800, 300)) * (1.3 if hour >= 22 or hour <= 4 else 1.0)
         other_res = abs(np.random.normal(200, 50))
@@ -109,7 +112,8 @@ def load_cache():
     try:
         df = pd.read_feather(CACHE_FILE)
         latest = pd.to_datetime(df['datetime']).max()
-        if datetime.now() - latest < timedelta(days=7):
+        tomorrow = (datetime.now() + timedelta(days=1)).replace(hour=23, minute=0, second=0, microsecond=0)
+        if datetime.now() - latest < timedelta(days=7) and latest >= tomorrow:
             return df
     except Exception:
         pass
@@ -127,13 +131,14 @@ def get_ukrenergo_genmix():
     if cached is not None:
         return to_aggregated(cached)
 
+    end_buffer = (datetime.now() + timedelta(days=2)).replace(hour=23, minute=0, second=0, microsecond=0)
     df_hist = fetch_historical_csv()
     if df_hist is not None and len(df_hist) > 0:
         last_hist = pd.to_datetime(df_hist['datetime']).max()
-        synthetic = generate_synthetic_for_gap(last_hist + timedelta(hours=1), datetime.now())
+        synthetic = generate_synthetic_for_gap(last_hist + timedelta(hours=1), end_buffer)
         combined = pd.concat([df_hist, synthetic], ignore_index=True)
     else:
-        combined = generate_synthetic_for_gap(datetime(2022, 1, 1), datetime.now())
+        combined = generate_synthetic_for_gap(datetime(2022, 1, 1), end_buffer)
 
     combined.sort_values('datetime', inplace=True)
     combined.reset_index(drop=True, inplace=True)

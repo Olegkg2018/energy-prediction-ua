@@ -42,11 +42,25 @@ def generate_synthetic_weather_for_range(start_date, end_date):
         base_temp = 8 + 15 * np.sin(np.pi * (month - 3) / 6)
         daily_variation = 6 * np.sin(np.pi * (hour - 6) / 12)
         temp = round(base_temp + daily_variation + np.random.normal(0, 2), 1)
+        month = ts.month
+        clouds = int(np.clip(np.random.normal(50 + 20 * np.sin(np.pi * (month - 3) / 6), 25), 0, 100))
+        declination = 23.45 * np.sin(np.radians(360 / 365 * (ts.dayofyear - 81)))
+        hour_angle = 15 * (hour - 12)
+        lat_rad = np.radians(47)
+        elevation = np.sin(lat_rad) * np.sin(np.radians(declination)) + \
+                    np.cos(lat_rad) * np.cos(np.radians(declination)) * np.cos(np.radians(hour_angle))
+        solar = 0
+        if elevation > 0 and 5 <= hour <= 21:
+            clear_sky = 1000 * elevation
+            cloud_factor = 1 - (clouds / 100) * 0.75
+            solar = max(0, clear_sky * cloud_factor)
         rows.append({
             'datetime': ts,
             'date': ts.strftime('%Y-%m-%d'),
             'hour': hour,
             'temperature': temp,
+            'clouds': clouds,
+            'solar_radiation': round(solar, 1),
         })
         ts += timedelta(hours=1)
     return pd.DataFrame(rows)
@@ -102,20 +116,22 @@ def generate_synthetic_genmix_for_range(start_year, end_year):
         start = datetime(year, 1, 1)
         end = datetime(year, 12, 31, 23)
         ts = start
+        year_solar_mult = 1.0 + max(0, year - 2021) * 0.5
+        nuclear_base = 4500 if year >= 2024 else 7500
         while ts <= end:
             hour = ts.hour
             month = ts.month
             is_winter = month in [12, 1, 2]
             is_summer = month in [6, 7, 8]
-            nuclear = np.random.normal(7500, 300)
-            thermal = np.random.normal(3000 if is_winter else 2000, 400)
+            nuclear = np.random.normal(nuclear_base, 300)
+            thermal = np.random.normal(2000 if is_winter else 1200, 400)
             if 8 <= hour <= 11 or 17 <= hour <= 21:
                 thermal += 500
-            hydro = np.random.normal(800, 150)
+            hydro = np.random.normal(600, 150)
             solar = 0
             if 6 <= hour <= 19:
                 hour_factor = np.sin(np.pi * (hour - 6) / 13)
-                solar = np.random.normal(2500 if is_summer else 1500, 500) * max(0, hour_factor)
+                solar = np.random.normal(2500 * year_solar_mult if is_summer else 1500 * year_solar_mult, 500) * max(0, hour_factor)
                 solar += np.random.normal(0, 200)
             wind = abs(np.random.normal(800, 300)) * (1.3 if hour >= 22 or hour <= 4 else 1.0)
             other_res = abs(np.random.normal(200, 50))
@@ -155,6 +171,8 @@ def build_features(df):
     df['sin_month'] = np.sin(2 * np.pi * df['month'] / 12)
     df['cos_month'] = np.cos(2 * np.pi * df['month'] / 12)
     df['days_since_epoch'] = _days_since_epoch(dt)
+    if 'solar_radiation' not in df.columns:
+        df['solar_radiation'] = 0
     for col in ['solar_index', 'wind_index', 'renewable_index',
                 'nuclear_share', 'thermal_share', 'hydro_share',
                 'solar_share', 'wind_share', 'res_share',
