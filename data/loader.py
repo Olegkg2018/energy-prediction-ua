@@ -196,6 +196,15 @@ def build_features(df):
     df['sin_month'] = np.sin(2 * np.pi * df['month'] / 12)
     df['cos_month'] = np.cos(2 * np.pi * df['month'] / 12)
     df['days_since_epoch'] = _days_since_epoch(dt)
+    # Demand proxy features
+    if 'temperature' in df.columns:
+        df['demand_proxy'] = df['temperature'] * (1.2 - 0.4 * df['is_weekend']) * (1 + 0.3 * np.cos(2 * np.pi * (df['hour'] - 19) / 24))
+        df['cooling_demand'] = np.maximum(df['temperature'] - 22, 0) * (1 - 0.3 * df['is_weekend'])
+        df['heating_demand'] = np.maximum(15 - df['temperature'], 0) * (1 + 0.2 * df['is_weekend'])
+    else:
+        df['demand_proxy'] = 0
+        df['cooling_demand'] = 0
+        df['heating_demand'] = 0
     if 'solar_radiation' not in df.columns:
         df['solar_radiation'] = 0
     if 'humidity' not in df.columns:
@@ -210,7 +219,7 @@ def build_features(df):
             df[col] = 0
     return df
 
-def get_combined_dataset():
+def get_combined_dataset(use_csv=True):
     global _cache
     if _cache is not None:
         return _cache
@@ -221,7 +230,7 @@ def get_combined_dataset():
         except Exception:
             pass
 
-    csv_prices = load_csv_prices()
+    csv_prices = load_csv_prices() if use_csv else None
     oree_prices = load_oree_prices()
 
     if csv_prices is not None and oree_prices is not None:
@@ -279,7 +288,7 @@ def get_combined_dataset():
     year_col = pd.to_datetime(merged['datetime']).dt.year
     csv_mask = year_col == 2025
     merged.loc[csv_mask, 'price'] = \
-        merged['price'] * (1 - merged['solar_share'] * 1.0).clip(lower=0.05)
+        merged['price'] * (1 - merged['solar_share'] * 1.5).clip(lower=0.03)
     merged['price'] = merged['price'].clip(lower=0.01)
     merged.sort_values('datetime', inplace=True)
     merged.reset_index(drop=True, inplace=True)
