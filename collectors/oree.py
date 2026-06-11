@@ -216,23 +216,48 @@ def get_sample_prices(days=30):
     return sample
 
 def update_oree_prices():
-    df = scrape_oree_prices()
-    if df is not None and len(df) > 0:
-        existing = get_cached_oree_prices()
-        if existing is not None:
-            combined = pd.concat([existing, df]).drop_duplicates(subset=['datetime']).sort_values('datetime')
-        else:
-            combined = df
-        combined.reset_index(drop=True, inplace=True)
-        try:
-            combined.to_feather(OREE_CACHE)
-        except Exception:
-            pass
-        return combined
-    cached = get_cached_oree_prices()
-    if cached is not None and len(cached) > 0:
-        return cached
-    return get_sample_prices(30)
+    """Fetch OREE prices from 2026-01-01 onwards, filling gaps in cache."""
+    existing = get_cached_oree_prices()
+    existing_months = set()
+    if existing is not None and len(existing) > 0:
+        existing_months = set(pd.to_datetime(existing['datetime']).dt.to_period('M'))
+
+    today = datetime.now()
+    target_months = set()
+    # Start from Dec 2025 to provide hour-0 mapping for Jan 1, 2026
+    d = pd.Timestamp('2025-12-01')
+    end = pd.Timestamp(today.year, today.month, 1)
+    while d <= end:
+        target_months.add(d.to_period('M'))
+        d += pd.DateOffset(months=1)
+
+    missing = sorted(target_months - existing_months)
+    if not missing and existing is not None:
+        return existing
+
+    all_data = []
+    if existing is not None and len(existing) > 0:
+        all_data.append(existing)
+    for period in missing:
+        df = fetch_month_prices(period.year, period.month)
+        if df is not None and len(df) > 0:
+            all_data.append(df)
+        time.sleep(random.uniform(0.5, 1.5))
+
+    if not all_data:
+        cached = get_cached_oree_prices()
+        if cached is not None and len(cached) > 0:
+            return cached
+        return get_sample_prices(30)
+
+    combined = pd.concat(all_data, ignore_index=True)
+    combined = combined.drop_duplicates(subset=['datetime']).sort_values('datetime')
+    combined.reset_index(drop=True, inplace=True)
+    try:
+        combined.to_feather(OREE_CACHE)
+    except Exception:
+        pass
+    return combined
 
 def get_latest_oree_prices(days=7):
     df = update_oree_prices()

@@ -55,7 +55,7 @@ def generate_synthetic_weather_for_range(start_date, end_date):
     np.random.seed(42)
     rows = []
     ts = pd.Timestamp(start_date)
-    end = pd.Timestamp(end_date)
+    end = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(hours=1)
     while ts <= end:
         hour = ts.hour
         month = ts.month
@@ -219,7 +219,7 @@ def build_features(df):
             df[col] = 0
     return df
 
-def get_combined_dataset(use_csv=True):
+def get_combined_dataset(use_csv=False):
     global _cache
     if _cache is not None:
         return _cache
@@ -230,19 +230,21 @@ def get_combined_dataset(use_csv=True):
         except Exception:
             pass
 
-    csv_prices = load_csv_prices() if use_csv else None
+    # Prefer real OREE data; fall back to synthetic CSV
     oree_prices = load_oree_prices()
 
-    if csv_prices is not None and oree_prices is not None:
-        csv_clean = csv_prices[~csv_prices['datetime'].isin(oree_prices['datetime'])]
-        prices = pd.concat([csv_clean, oree_prices], ignore_index=True)
-    elif csv_prices is not None:
-        prices = csv_prices
-    elif oree_prices is not None and len(oree_prices) >= 1000:
-        prices = oree_prices
+    if oree_prices is not None and len(oree_prices) >= 1000:
+        prices = oree_prices.copy()
+        prices['source'] = 'real'
     else:
-        from collectors.oree import get_sample_prices
-        prices = get_sample_prices(365)
+        csv_prices = load_csv_prices() if use_csv else None
+        if csv_prices is not None:
+            prices = csv_prices.copy()
+            prices['source'] = 'synthetic'
+        else:
+            from collectors.oree import get_sample_prices
+            prices = get_sample_prices(365)
+            prices['source'] = 'synthetic'
 
     price_min_date = prices['date'].min()
     price_max_date = prices['date'].max()
@@ -285,9 +287,9 @@ def get_combined_dataset(use_csv=True):
     merged['solar_irradiance'] = merged['solar_share'] * merged.get('solar_radiation', 0)
     merged['solar_intensity'] = merged['solar_share'] * merged['sin_hour'].clip(lower=0)
     merged['is_solar_dip_hour'] = ((merged['hour'] >= 10) & (merged['hour'] <= 15)).astype(int)
-    year_col = pd.to_datetime(merged['datetime']).dt.year
-    csv_mask = year_col == 2025
-    merged.loc[csv_mask, 'price'] = \
+    # Only apply synthetic solar dip scaling to non-real data
+    syn_mask = merged['source'] == 'synthetic'
+    merged.loc[syn_mask, 'price'] = \
         merged['price'] * (1 - merged['solar_share'] * 1.5).clip(lower=0.03)
     merged['price'] = merged['price'].clip(lower=0.01)
     merged.sort_values('datetime', inplace=True)

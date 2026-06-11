@@ -4,7 +4,6 @@ import pandas as pd
 import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.ensemble import HistGradientBoostingRegressor
 import xgboost as xgb
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__))
@@ -60,12 +59,8 @@ def train_quantile_models(data_df, force=False):
     X = df[available].values
     y = df['price'].values
 
-    df['_year'] = pd.to_datetime(df['datetime']).dt.year
-    sample_weight = np.where(df['_year'] >= 2026, 5.0, 1.0)
-    df.drop(columns=['_year'], inplace=True)
-
-    X_train, X_test, y_train, y_test, w_train, _ = train_test_split(
-        X, y, sample_weight, test_size=0.15, random_state=42, shuffle=True
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.15, random_state=42, shuffle=True
     )
 
     quantiles = [0.10, 0.50, 0.90]
@@ -73,8 +68,8 @@ def train_quantile_models(data_df, force=False):
         model = xgb.XGBRegressor(
             objective='reg:quantileerror',
             quantile_alpha=quantile,
-            n_estimators=300,
-            max_depth=8,
+            n_estimators=500,
+            max_depth=6,
             learning_rate=0.05,
             subsample=0.8,
             colsample_bytree=0.8,
@@ -84,7 +79,7 @@ def train_quantile_models(data_df, force=False):
             random_state=42,
             n_jobs=-1
         )
-        model.fit(X_train, y_train, eval_set=[(X_test, y_test)], sample_weight=w_train, verbose=False)
+        model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
         
         pred_q = model.predict(X_test)
         mae_q = mean_absolute_error(y_test, pred_q)
@@ -142,17 +137,13 @@ def train_model(data_df, force=False):
     X = df[available].values
     y = df['price'].values
 
-    df['_year'] = pd.to_datetime(df['datetime']).dt.year
-    sample_weight = np.where(df['_year'] >= 2026, 5.0, 1.0)
-    df.drop(columns=['_year'], inplace=True)
-
-    X_train, X_test, y_train, y_test, w_train, _ = train_test_split(
-        X, y, sample_weight, test_size=0.15, random_state=42, shuffle=True
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.15, random_state=42, shuffle=True
     )
 
     xgb_model = xgb.XGBRegressor(
-        n_estimators=300,
-        max_depth=8,
+        n_estimators=500,
+        max_depth=6,
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
@@ -162,51 +153,20 @@ def train_model(data_df, force=False):
         random_state=42,
         n_jobs=-1
     )
-    xgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], sample_weight=w_train, verbose=False)
+    xgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
 
-    hgb_model = HistGradientBoostingRegressor(
-        max_iter=300,
-        max_depth=8,
-        learning_rate=0.05,
-        min_samples_leaf=5,
-        random_state=42,
-    )
-    hgb_model.fit(X_train, y_train, sample_weight=w_train)
+    preds = xgb_model.predict(X_test)
+    mae_val = mean_absolute_error(y_test, preds)
+    r2_val = r2_score(y_test, preds)
 
-    pred_xgb = xgb_model.predict(X_test)
-    pred_hgb = hgb_model.predict(X_test)
-
-    mae_xgb = mean_absolute_error(y_test, pred_xgb)
-    mae_hgb = mean_absolute_error(y_test, pred_hgb)
-
-    inv_xgb = 1.0 / max(mae_xgb, 0.01)
-    inv_hgb = 1.0 / max(mae_hgb, 0.01)
-    w_xgb = inv_xgb / (inv_xgb + inv_hgb)
-    w_hgb = inv_hgb / (inv_xgb + inv_hgb)
-
-    pred_ensemble = pred_xgb * w_xgb + pred_hgb * w_hgb
-    mae_ensemble = mean_absolute_error(y_test, pred_ensemble)
-    r2_ensemble = r2_score(y_test, pred_ensemble)
-
-    model = {
-        'xgb': xgb_model,
-        'hgb': hgb_model,
-        'weight_xgb': round(w_xgb, 4),
-        'weight_hgb': round(w_hgb, 4),
-    }
-
+    model = xgb_model
     metrics = {
-        'mae': round(float(mae_ensemble), 2),
-        'mae_xgb': round(float(mae_xgb), 2),
-        'mae_hgb': round(float(mae_hgb), 2),
-        'weight_xgb': round(w_xgb, 4),
-        'weight_hgb': round(w_hgb, 4),
-        'rmse': round(float(np.sqrt(mean_squared_error(y_test, pred_ensemble))), 2),
-        'r2': round(float(r2_ensemble), 4),
+        'mae': round(float(mae_val), 2),
+        'rmse': round(float(np.sqrt(mean_squared_error(y_test, preds))), 2),
+        'r2': round(float(r2_val), 4),
         'n_train': int(len(X_train)),
         'n_test': int(len(X_test)),
         'feature_cols': available,
-        'ensemble': True,
     }
 
     os.makedirs(MODEL_DIR, exist_ok=True)
