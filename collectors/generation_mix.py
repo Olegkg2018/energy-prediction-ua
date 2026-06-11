@@ -247,7 +247,7 @@ def get_generation_stats(days=7):
         'updated': datetime.now().isoformat(),
         'latest': {
             'date': latest['date'],
-            'hour': int(latest['hour']),
+            'hour': int(latest['hour']) + 1,
             'nuclear_mw': round(float(latest['nuclear_mw']), 0) if 'nuclear_mw' in latest else 0,
             'thermal_mw': round(float(latest['thermal_mw']), 0) if 'thermal_mw' in latest else 0,
             'hydro_mw': round(float(latest['hydro_mw']), 0) if 'hydro_mw' in latest else 0,
@@ -281,4 +281,6 @@ def get_generation_timeseries(days=7):
     df = get_generation_mix(days)
     if df is None or len(df) == 0:
         return []
-    return df.tail(24 * days).to_dict('records')
+    records = df.tail(24 * days).copy()
+    records['hour'] = records['hour'] + 1
+    return records.to_dict('records')

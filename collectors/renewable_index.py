@@ -198,4 +198,6 @@ def get_zone_details():
                 'data': zdata[['date', 'hour', 'solar_gen_index', 'wind_gen_index',
                                'temperature', 'clouds', 'wind_speed']].tail(48).to_dict('records')
             }
+            for d in result[zone['name']]['data']:
+                d['hour'] = d['hour'] + 1
     return result

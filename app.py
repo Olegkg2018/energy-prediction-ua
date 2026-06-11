@@ -198,7 +198,8 @@ def api_oree_prices():
     try:
         prices = update_oree_prices()
         if prices is not None:
-            recent_prices = prices.tail(24 * 7)
+            recent_prices = prices.tail(24 * 7).copy()
+            recent_prices['hour'] = recent_prices['hour'] + 1
             return jsonify({
                 'success': True,
                 'prices': recent_prices[['date', 'hour', 'price']].to_dict('records')
@@ -212,9 +213,11 @@ def api_idm_prices():
     try:
         prices = get_latest_idm_prices(days=7)
         if prices is not None:
+            p = prices.copy()
+            p['hour'] = p['hour'] + 1
             return jsonify({
                 'success': True,
-                'prices': prices[['date', 'hour', 'price']].to_dict('records')
+                'prices': p[['date', 'hour', 'price']].to_dict('records')
             })
     except Exception:
         pass
@@ -225,7 +228,8 @@ def api_live_prices():
     try:
         prices = update_oree_prices()
         if prices is not None:
-            latest = prices.tail(48)
+            latest = prices.tail(48).copy()
+            latest['hour'] = latest['hour'] + 1
             return jsonify({
                 'success': True,
                 'prices': latest[['date', 'hour', 'price']].to_dict('records')
@@ -463,7 +467,7 @@ def api_historical_surplus():
         result = []
         for _, r in by_hour.iterrows():
             result.append({
-                'hour': f"{int(r['hour']):02d}:00",
+                'hour': f"{int(r['hour']) + 1:02d}:00",
                 'count': int(r['count']),
                 'avg_price': round(float(r['mean']), 2),
                 'min_price': round(float(r['min']), 2)

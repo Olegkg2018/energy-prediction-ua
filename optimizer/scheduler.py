@@ -81,7 +81,7 @@ class BatteryOptimizer:
             net = dc - ch
             action = 'charge' if ch > 0.05 else ('discharge' if dc > 0.05 else 'idle')
             schedule.append({
-                'hour': t,
+                'hour': t + 1,
                 'charge_mw': round(ch, 2),
                 'discharge_mw': round(dc, 2),
                 'net_mw': round(net, 2),
@@ -164,7 +164,7 @@ class SimpleBatteryOptimizer:
                 soc_mwh -= dc / 0.92
                 action = 'discharge'
             schedule.append({
-                'hour': t,
+                'hour': t + 1,
                 'action': action,
                 'price_uah': round(effective_prices[t], 2),
                 'charge_mw': round(ch, 2),

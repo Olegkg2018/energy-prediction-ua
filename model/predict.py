@@ -199,7 +199,7 @@ def predict_next_day_prices(target_date=None):
         hour = int(row['hour'])
         price = float(predictions[idx]) if predictions is not None and idx < len(predictions) else 0
         results.append({
-            'hour': f"{hour:02d}:00",
+            'hour': f"{(hour % 24) + 1:02d}:00",
             'hour_num': hour,
             'price': max(price, 0.01),
             'temperature': round(float(row.get('temperature', 15) if pd.notna(row.get('temperature', 15)) else 15), 1),
@@ -234,7 +234,7 @@ def predict_with_dates(dates):
         for idx, (_, row) in enumerate(day_weather.iterrows()):
             price = float(preds[idx]) if preds is not None and idx < len(preds) else 0
             results.append({
-                'hour': f"{int(row['hour']):02d}:00",
+                'hour': f"{int(row['hour']) + 1:02d}:00",
                 'price': max(price, 0.01),
                 'temperature': round(float(row.get('temperature', 15)), 1)
             })

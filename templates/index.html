@@ -288,7 +288,7 @@ function loadGenerationMix() {
             const s = data.stats;
             const container = document.getElementById('genmix-stats');
             const h = s.latest;
-            const dataTime = `${h.date} ${h.hour}:00`;
+            const dataTime = `${h.date} ${h.hour + 1}:00`;
             const updatedStr = s.updated ? new Date(s.updated).toLocaleString('uk-UA', {hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'numeric', year: 'numeric'}) : '—';
             let html = `
                 <div class="stat"><span class="stat-label">Дата/час даних</span><span class="stat-value" style="font-size: 0.85rem">${dataTime}</span></div>
@@ -355,7 +355,7 @@ function loadRenewableIndex() {
             }
             if (data.forecast && data.forecast.length > 0) {
                 const f = data.forecast;
-                const hours = f.map(r => `${r.hour}:00`);
+                const hours = f.map(r => `${r.hour + 1}:00`);
                 const solar = f.map(r => r.solar_index || 0);
                 const wind = f.map(r => (r.wind_index || 0) * 500);
                 const total = f.map(r => r.renewable_index || 0);
