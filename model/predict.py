@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from model.train import load_model, predict_hourly, load_metrics
+from model.train import load_model, predict_hourly, load_metrics, load_quantile_model
 from collectors.weather import get_forecast
 from collectors.renewable_index import get_renewable_indices
 from collectors.generation_mix import get_generation_mix
@@ -170,6 +170,7 @@ def predict_next_day_prices(target_date=None):
         target_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
 
     model = load_model()
+    quantile_model = load_quantile_model()
     if model is None:
         return None
 
@@ -193,6 +194,33 @@ def predict_next_day_prices(target_date=None):
         return None
 
     predictions = predict_hourly(model, features)
+    # Use quantile model for midday hours (10-16) if available
+    if quantile_model is not None:
+        midday_mask = features['hour'].between(10, 16)
+        if midday_mask.any():
+            # Select only the features the quantile model was trained on
+            quantile_features = [
+                'hour', 'dayofweek', 'month', 'day',
+                'is_weekend', 'is_holiday',
+                'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
+                'temperature',
+                'humidity',
+                'solar_radiation',
+                'solar_index', 'wind_index', 'renewable_index',
+                'nuclear_share', 'thermal_share', 'hydro_share',
+                'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
+                'days_since_epoch',
+                'solar_irradiance', 'solar_intensity',
+                'is_solar_dip_hour',
+            ]
+            available_q = [c for c in quantile_features if c in features.columns]
+            midday_features = features[midday_mask]
+            midday_preds = quantile_model.predict(midday_features[available_q].values)
+            pred_idx = 0
+            for idx in features.index:
+                if midday_mask.loc[idx]:
+                    predictions[idx] = midday_preds[pred_idx]
+                    pred_idx += 1
 
     results = []
     for idx, (_, row) in enumerate(day_weather.iterrows()):

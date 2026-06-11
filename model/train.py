@@ -10,6 +10,85 @@ import xgboost as xgb
 MODEL_DIR = os.path.join(os.path.dirname(__file__))
 MODEL_PATH = os.path.join(MODEL_DIR, 'model.pkl')
 MODEL_CONFIG_PATH = os.path.join(MODEL_DIR, 'model_config.json')
+QUANTILE_MODEL_PATH = os.path.join(MODEL_DIR, 'quantile_model.pkl')
+QUANTILE_CONFIG_PATH = os.path.join(MODEL_DIR, 'quantile_config.json')
+
+def train_quantile_model(data_df, force=False):
+    """Train XGBoost quantile regression (P25) for midday solar dip hours."""
+    if os.path.exists(QUANTILE_MODEL_PATH) and not force:
+        try:
+            model = joblib.load(QUANTILE_MODEL_PATH)
+            return model
+        except Exception:
+            pass
+
+    feature_cols = [
+        'hour', 'dayofweek', 'month', 'day',
+        'is_weekend', 'is_holiday',
+        'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
+        'temperature',
+        'humidity',
+        'solar_radiation',
+        'solar_index', 'wind_index', 'renewable_index',
+        'nuclear_share', 'thermal_share', 'hydro_share',
+        'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
+        'days_since_epoch',
+        'solar_irradiance', 'solar_intensity',
+        'is_solar_dip_hour',
+    ]
+
+    available = [c for c in feature_cols if c in data_df.columns]
+    # Filter to midday hours (10-16) where solar dip occurs
+    df = data_df.dropna(subset=['price'] + available).copy()
+    df = df[df['hour'].between(10, 16)]
+    if len(df) < 500:
+        return None
+
+    X = df[available].values
+    y = df['price'].values
+
+    df['_year'] = pd.to_datetime(df['datetime']).dt.year
+    sample_weight = np.where(df['_year'] >= 2026, 5.0, 1.0)
+    df.drop(columns=['_year'], inplace=True)
+
+    X_train, X_test, y_train, y_test, w_train, _ = train_test_split(
+        X, y, sample_weight, test_size=0.15, random_state=42, shuffle=True
+    )
+
+    # Quantile regression with pinball loss (alpha=0.25 for P25)
+    quantile_model = xgb.XGBRegressor(
+        objective='reg:quantileerror',
+        quantile_alpha=0.25,
+        n_estimators=300,
+        max_depth=8,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=1.0,
+        reg_lambda=2.0,
+        min_child_weight=5,
+        random_state=42,
+        n_jobs=-1
+    )
+    quantile_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], sample_weight=w_train, verbose=False)
+
+    pred_q = quantile_model.predict(X_test)
+    mae_q = mean_absolute_error(y_test, pred_q)
+
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    joblib.dump(quantile_model, QUANTILE_MODEL_PATH)
+    import json
+    with open(QUANTILE_CONFIG_PATH, 'w') as f:
+        json.dump({
+            'mae': round(float(mae_q), 2),
+            'n_train': int(len(X_train)),
+            'n_test': int(len(X_test)),
+            'feature_cols': available,
+            'quantile': 0.25,
+            'hours': '10-16',
+        }, f)
+
+    return quantile_model
 
 def train_model(data_df, force=False):
     if os.path.exists(MODEL_PATH) and not force:
@@ -116,6 +195,9 @@ def train_model(data_df, force=False):
     with open(MODEL_CONFIG_PATH, 'w') as f:
         json.dump(metrics, f)
 
+    # Train quantile model for midday solar dip
+    train_quantile_model(data_df, force=force)
+
     return model, metrics
 
 def load_model():
@@ -133,6 +215,15 @@ def load_metrics():
     import json
     with open(MODEL_CONFIG_PATH, 'r') as f:
         return json.load(f)
+
+def load_quantile_model():
+    if not os.path.exists(QUANTILE_MODEL_PATH):
+        return None
+    try:
+        return joblib.load(QUANTILE_MODEL_PATH)
+    except Exception as e:
+        print(f"[QUANTILE] Load error: {e}")
+        return None
 
 def predict_hourly(model, features_df):
     if model is None:
