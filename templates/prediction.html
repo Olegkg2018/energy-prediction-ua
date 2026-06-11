@@ -191,7 +191,7 @@ function renderPredictionChart(predictions, date) {
     const realPrices = oreeCache ? oreeCache.filter(p => p.date === date).sort((a, b) => a.hour - b.hour) : [];
     if (realPrices.length > 0) {
         traces.push({
-            x: realPrices.map(p => `${String(p.hour + 1).padStart(2, '0')}:00`),
+            x: realPrices.map(p => `${String(p.hour).padStart(2, '0')}:00`),
             y: realPrices.map(p => p.price),
             type: 'scatter', mode: 'lines+markers',
             name: '📊 Реальна ціна (OPEE)',
@@ -236,7 +236,7 @@ function renderRealComparison(predictions, date) {
     let totalDiff = 0, count = 0, maxDiff = 0, mae = 0;
     const rows = [];
     for (const r of realPrices) {
-        const h = `${String(r.hour + 1).padStart(2, '0')}:00`;
+        const h = `${String(r.hour).padStart(2, '0')}:00`;
         const pred = priceByHour[h];
         if (pred !== undefined) {
             const diff = Math.abs(pred - r.price);
@@ -562,7 +562,7 @@ function loadOreePrices() {
             for (const d of dates) {
                 const pts = byDate[d].sort((a, b) => a.hour - b.hour);
                 traces.push({
-                    x: pts.map(p => `${p.hour + 1}:00`),
+                    x: pts.map(p => `${p.hour}:00`),
                     y: pts.map(p => p.price),
                     type: 'scatter', mode: 'lines+markers',
                     name: `${d} ${market}`,
