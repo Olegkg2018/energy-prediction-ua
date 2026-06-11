@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from model.train import load_model, predict_hourly, load_metrics, load_quantile_model
+from model.train import load_model, predict_hourly, load_metrics, load_quantile_models
 from collectors.weather import get_forecast
 from collectors.renewable_index import get_renewable_indices
 from collectors.generation_mix import get_generation_mix
@@ -107,6 +107,27 @@ def prepare_prediction_features(weather_forecast):
 
     df['solar_irradiance'] = df['solar_share'] * df.get('solar_radiation', 0)
     df['solar_intensity'] = df['solar_share'] * df['sin_hour'].clip(lower=0)
+    df['is_solar_dip_hour'] = ((df['hour'] >= 10) & (df['hour'] <= 15)).astype(int)
+
+    # Price lag features from real OREE data
+    try:
+        oree_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'oree_prices.feather')
+        if os.path.exists(oree_path):
+            oree_lags = pd.read_feather(oree_path)[['datetime', 'price']].copy()
+            oree_lags['datetime'] = pd.to_datetime(oree_lags['datetime'])
+            oree_lags = oree_lags.drop_duplicates(subset='datetime')
+            for lag_hours, col_name in [(24, 'price_lag_24h'), (168, 'price_lag_168h')]:
+                ref = oree_lags.copy()
+                ref['datetime'] = ref['datetime'] + pd.Timedelta(hours=lag_hours)
+                ref.rename(columns={'price': col_name}, inplace=True)
+                df = pd.merge(df, ref[['datetime', col_name]], on='datetime', how='left')
+                df[col_name] = df[col_name].fillna(0)
+        else:
+            df['price_lag_24h'] = 0
+            df['price_lag_168h'] = 0
+    except Exception:
+        df['price_lag_24h'] = 0
+        df['price_lag_168h'] = 0
 
     return df
 
@@ -170,7 +191,7 @@ def predict_next_day_prices(target_date=None):
         target_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
 
     model = load_model()
-    quantile_model = load_quantile_model()
+    quantile_models = load_quantile_models()
     if model is None:
         return None
 
@@ -194,11 +215,10 @@ def predict_next_day_prices(target_date=None):
         return None
 
     predictions = predict_hourly(model, features)
-    # Use quantile model for midday hours (10-16) if available
-    if quantile_model is not None:
-        midday_mask = features['hour'].between(10, 16)
+    # Use quantile models (P10/P50/P90) for extended midday hours (9-19) with boundary blending
+    if quantile_models is not None:
+        midday_mask = features['hour'].between(9, 19)
         if midday_mask.any():
-            # Select only the features the quantile model was trained on
             quantile_features = [
                 'hour', 'dayofweek', 'month', 'day',
                 'is_weekend', 'is_holiday',
@@ -212,15 +232,31 @@ def predict_next_day_prices(target_date=None):
                 'days_since_epoch',
                 'solar_irradiance', 'solar_intensity',
                 'is_solar_dip_hour',
+                'price_lag_24h', 'price_lag_168h',
             ]
             available_q = [c for c in quantile_features if c in features.columns]
             midday_features = features[midday_mask]
-            midday_preds = quantile_model.predict(midday_features[available_q].values)
+            
+            p10_preds = quantile_models[0.10].predict(midday_features[available_q].values) if 0.10 in quantile_models else None
+            p50_preds = quantile_models[0.50].predict(midday_features[available_q].values) if 0.50 in quantile_models else None
+            p90_preds = quantile_models[0.90].predict(midday_features[available_q].values) if 0.90 in quantile_models else None
+            
             pred_idx = 0
             for idx in features.index:
                 if midday_mask.loc[idx]:
-                    predictions[idx] = midday_preds[pred_idx]
+                    h = features.loc[idx, 'hour']
+                    p50 = p50_preds[pred_idx] if p50_preds is not None else None
+                    p10 = p10_preds[pred_idx] if p10_preds is not None else None
+                    p90 = p90_preds[pred_idx] if p90_preds is not None else None
                     pred_idx += 1
+                    
+                    # Boundary blending: 9,19 use 50% quantile + 50% ensemble
+                    if h in [9, 19]:
+                        if p50 is not None:
+                            predictions[idx] = 0.5 * p50 + 0.5 * predictions[idx]
+                    else:
+                        if p50 is not None:
+                            predictions[idx] = p50
 
     results = []
     for idx, (_, row) in enumerate(day_weather.iterrows()):

@@ -292,6 +292,15 @@ def get_combined_dataset(use_csv=True):
     merged['price'] = merged['price'].clip(lower=0.01)
     merged.sort_values('datetime', inplace=True)
     merged.reset_index(drop=True, inplace=True)
+    
+    # Price lag features using actual datetime differences
+    ref = merged[['datetime', 'price']].copy()
+    for lag_hours, col_name in [(24, 'price_lag_24h'), (168, 'price_lag_168h')]:
+        ref_lag = ref.copy()
+        ref_lag['datetime'] = ref_lag['datetime'] + pd.Timedelta(hours=lag_hours)
+        ref_lag.rename(columns={'price': col_name}, inplace=True)
+        merged = pd.merge(merged, ref_lag[['datetime', col_name]], on='datetime', how='left')
+        merged[col_name] = merged[col_name].fillna(merged['price'].mean())
 
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
