@@ -198,11 +198,11 @@ def api_oree_prices():
     try:
         prices = update_oree_prices()
         if prices is not None:
-            recent_prices = prices.tail(24 * 7).copy()
-            recent_prices['hour'] = recent_prices['hour'] + 1
+            out = prices.copy()
+            out['hour'] = out['hour'] + 1
             return jsonify({
                 'success': True,
-                'prices': recent_prices[['date', 'hour', 'price']].to_dict('records')
+                'prices': out[['date', 'hour', 'price']].to_dict('records')
             })
     except Exception as e:
         pass
