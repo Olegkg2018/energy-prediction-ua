@@ -8,11 +8,19 @@
             <div class="date-selector">
                 <label for="dateSelect">Оберіть дату:</label>
                 <input type="date" id="dateSelect" value="{{ tomorrow }}">
-                <button class="btn btn-primary" onclick="loadPrediction()">Отримати прогноз</button>
+                <button class="btn btn-primary" id="btnPredict" onclick="loadPrediction()">Отримати прогноз</button>
                 <button class="btn btn-secondary" onclick="loadOptimization()">Оптимізувати батарею</button>
                 <button class="btn btn-info" onclick="loadFactors()">Аналіз факторів</button>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- Loading spinner -->
+<div class="spinner-overlay" id="loadingOverlay">
+    <div class="spinner-box">
+        <div class="spinner"></div>
+        <div class="spinner-text">Розрахунок прогнозу...</div>
     </div>
 </div>
 
@@ -151,9 +159,15 @@ function loadOreePricesCache() {
 
 function loadPrediction() {
     const date = document.getElementById('dateSelect').value;
+    const overlay = document.getElementById('loadingOverlay');
+    const btn = document.getElementById('btnPredict');
+    overlay.classList.add('active');
+    btn.classList.add('btn-loading');
     fetch(`/api/predict?date=${date}`)
         .then(r => r.json())
         .then(data => {
+            overlay.classList.remove('active');
+            btn.classList.remove('btn-loading');
             if (!data.success) {
                 document.getElementById('price-chart').innerHTML = `<p class="error">${data.error}</p>`;
                 return;
@@ -161,6 +175,10 @@ function loadPrediction() {
             renderPredictionChart(data.predictions, date);
             renderPredictionTable(data.predictions);
             renderRealComparison(data.predictions, date);
+        })
+        .catch(() => {
+            overlay.classList.remove('active');
+            btn.classList.remove('btn-loading');
         });
 }
 
