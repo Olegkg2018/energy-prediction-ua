@@ -121,4 +121,4 @@ energy-prediction-ua/
 
 ## Ліцензія
 
-MIT
+GPLv3

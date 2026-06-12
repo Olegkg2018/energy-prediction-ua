@@ -77,25 +77,42 @@ def prepare_prediction_features(target_date):
     df['solar_intensity'] = df['solar_share'] * df['sin_hour'].clip(lower=0)
     df['is_solar_dip_hour'] = ((df['hour'] >= 10) & (df['hour'] <= 15)).astype(int)
 
-    # Price lag features from real OREE data
+    # Price lag + rolling features from real OREE data
     try:
         oree_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'oree_prices.feather')
         if os.path.exists(oree_path):
             oree_lags = pd.read_feather(oree_path)[['datetime', 'price']].copy()
             oree_lags['datetime'] = pd.to_datetime(oree_lags['datetime'])
-            oree_lags = oree_lags.drop_duplicates(subset='datetime')
+            oree_lags = oree_lags.drop_duplicates(subset='datetime').sort_values('datetime')
             for lag_hours, col_name in [(24, 'price_lag_24h'), (168, 'price_lag_168h')]:
                 ref = oree_lags.copy()
                 ref['datetime'] = ref['datetime'] + pd.Timedelta(hours=lag_hours)
                 ref.rename(columns={'price': col_name}, inplace=True)
                 df = pd.merge(df, ref[['datetime', col_name]], on='datetime', how='left')
                 df[col_name] = df[col_name].fillna(0)
+            # Rolling stats from real OREE data
+            oree_hist = oree_lags[['datetime', 'price']].copy()
+            oree_hist['price_rolling_mean_24h'] = oree_hist['price'].rolling(window=24, min_periods=1).mean()
+            oree_hist['price_rolling_std_24h'] = oree_hist['price'].rolling(window=24, min_periods=1).std().fillna(0)
+            oree_hist['price_delta_1h'] = oree_hist['price'].diff(1).fillna(0)
+            # For price_vs_yesterday, shift by 24h
+            oree_for_vs = oree_lags[['datetime', 'price']].copy()
+            oree_for_vs['datetime'] = oree_for_vs['datetime'] + pd.Timedelta(hours=24)
+            oree_for_vs.rename(columns={'price': 'price_lag_24h_tmp'}, inplace=True)
+            oree_hist = pd.merge(oree_hist, oree_for_vs, on='datetime', how='left')
+            oree_hist['price_vs_yesterday'] = (oree_hist['price'] - oree_hist['price_lag_24h_tmp']).fillna(0)
+            oree_hist.drop(columns=['price_lag_24h_tmp'], inplace=True)
+            for col in ['price_rolling_mean_24h', 'price_rolling_std_24h', 'price_delta_1h', 'price_vs_yesterday']:
+                df = pd.merge(df, oree_hist[['datetime', col]], on='datetime', how='left')
+                df[col] = df[col].fillna(0)
         else:
-            df['price_lag_24h'] = 0
-            df['price_lag_168h'] = 0
+            for col in ['price_lag_24h', 'price_lag_168h', 'price_rolling_mean_24h',
+                        'price_rolling_std_24h', 'price_delta_1h', 'price_vs_yesterday']:
+                df[col] = 0
     except Exception:
-        df['price_lag_24h'] = 0
-        df['price_lag_168h'] = 0
+        for col in ['price_lag_24h', 'price_lag_168h', 'price_rolling_mean_24h',
+                    'price_rolling_std_24h', 'price_delta_1h', 'price_vs_yesterday']:
+            df[col] = 0
 
     return df
 
@@ -141,7 +158,9 @@ def predict_next_day_prices(target_date=None):
                 'hour', 'dayofweek', 'month', 'day',
                 'is_weekend', 'is_holiday',
                 'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-                'temperature',
+                'sin_dayofyear', 'cos_dayofyear',
+                'sin_hour_of_week', 'cos_hour_of_week',
+                'temperature', 'temperature_squared',
                 'humidity',
                 'solar_radiation',
                 'solar_index', 'wind_index', 'renewable_index',
@@ -150,7 +169,11 @@ def predict_next_day_prices(target_date=None):
                 'days_since_epoch',
                 'solar_irradiance', 'solar_intensity',
                 'is_solar_dip_hour',
+                'demand_proxy', 'cooling_demand', 'heating_demand',
                 'price_lag_24h', 'price_lag_168h',
+                'price_rolling_mean_24h', 'price_rolling_std_24h',
+                'price_delta_1h', 'price_vs_yesterday',
+                'solar_x_hour', 'wind_x_hour',
             ]
             available_q = [c for c in quantile_features if c in features.columns]
             midday_features = features[midday_mask]
