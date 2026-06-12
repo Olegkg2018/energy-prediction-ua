@@ -160,21 +160,13 @@ def predict_next_day_prices(target_date=None):
     if quantile_models is not None:
         midday_mask = features['hour'].between(9, 19)
         if midday_mask.any():
-            quantile_features = [
-                'hour', 'dayofweek', 'month', 'day',
-                'is_weekend', 'is_holiday',
-                'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-                'temperature',
-                'humidity',
-                'solar_radiation',
-                'solar_index', 'wind_index', 'renewable_index',
-                'nuclear_share', 'thermal_share', 'hydro_share',
-                'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
-                'days_since_epoch',
-                'solar_irradiance', 'solar_intensity',
-                'is_solar_dip_hour',
-                'price_lag_24h', 'price_lag_168h',
-            ]
+            import json as _json
+            _qc_path = os.path.join(os.path.dirname(__file__), 'quantile_config.json')
+            if os.path.exists(_qc_path):
+                with open(_qc_path) as _qf:
+                    quantile_features = _json.load(_qf).get('feature_cols', [])
+            else:
+                quantile_features = list(features.columns)
             available_q = [c for c in quantile_features if c in features.columns]
             midday_features = features[midday_mask]
             
