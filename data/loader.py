@@ -76,6 +76,8 @@ def generate_synthetic_weather_for_range(start_date, end_date):
             cloud_factor = 1 - (clouds / 100) * 0.75
             solar = max(0, clear_sky * cloud_factor)
         humidity = int(np.clip(np.random.normal(70 - 15 * np.sin(np.pi * (hour - 6) / 12), 15), 30, 95))
+        wind_base = 4 + 2 * np.sin(np.pi * (month - 1) / 6)
+        wind_speed = round(abs(np.random.normal(wind_base, 2)), 1)
         rows.append({
             'datetime': ts,
             'date': ts.strftime('%Y-%m-%d'),
@@ -84,6 +86,7 @@ def generate_synthetic_weather_for_range(start_date, end_date):
             'humidity': humidity,
             'clouds': clouds,
             'solar_radiation': round(solar, 1),
+            'wind_speed': wind_speed,
         })
         ts += timedelta(hours=1)
     return pd.DataFrame(rows)

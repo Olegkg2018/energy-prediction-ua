@@ -124,30 +124,54 @@ def prepare_prediction_features(target_date):
 
 
 
-def _smooth_prices(results):
-    prices = [r['price'] for r in results]
-    n = len(prices)
-    smoothed = []
-    for i in range(n):
-        w = prices[i]
-        t = 1
-        for d in [1, 2]:
-            if i - d >= 0:
-                w += prices[i - d] * (1 / d)
-                t += 1 / d
-            if i + d < n:
-                w += prices[i + d] * (1 / d)
-                t += 1 / d
-        smoothed.append(w / t)
-    for i, r in enumerate(results):
-        r['price'] = round(smoothed[i], 2)
+def _get_quantile_predictions(features, midday_mask):
+    import json as _json
+    qm = load_quantile_models()
+    if qm is None or not midday_mask.any():
+        return None, None, None
+    _qc_path = os.path.join(os.path.dirname(__file__), 'quantile_config.json')
+    if os.path.exists(_qc_path):
+        with open(_qc_path) as _qf:
+            quantile_features = _json.load(_qf).get('feature_cols', [])
+    else:
+        quantile_features = list(features.columns)
+    available_q = [c for c in quantile_features if c in features.columns]
+    midday_features = features[midday_mask]
+    p10 = qm.get(0.10).predict(midday_features[available_q].values) if 0.10 in qm else None
+    p50 = qm.get(0.50).predict(midday_features[available_q].values) if 0.50 in qm else None
+    p90 = qm.get(0.90).predict(midday_features[available_q].values) if 0.90 in qm else None
+    return p10, p50, p90
+
+def _build_results(features, predictions, p10_all=None, p50_all=None, p90_all=None, midday_mask=None):
+    results = []
+    q_idx = 0
+    for idx, (_, row) in enumerate(features.iterrows()):
+        hour = int(row['hour'])
+        price = float(predictions[idx]) if predictions is not None and idx < len(predictions) else 0
+        entry = {
+            'hour': f"{(hour % 24) + 1:02d}:00",
+            'hour_num': hour,
+            'price': max(price, 0.01),
+            'temperature': round(float(row.get('temperature', 15) if pd.notna(row.get('temperature', 15)) else 15), 1),
+            'humidity': int(row.get('humidity', 50) if pd.notna(row.get('humidity', 50)) else 50),
+            'clouds': int(row.get('clouds', 50) if pd.notna(row.get('clouds', 50)) else 50),
+            'wind_speed': round(float(row.get('wind_speed', 0) if pd.notna(row.get('wind_speed', 0)) else 0), 1),
+            'solar_radiation': round(float(row.get('solar_radiation', 0) if pd.notna(row.get('solar_radiation', 0)) else 0), 1),
+        }
+        if midday_mask is not None and midday_mask.iloc[idx] and p50_all is not None:
+            entry['price_p10'] = round(float(p10_all[q_idx]), 2) if p10_all is not None else None
+            entry['price_p50'] = round(float(p50_all[q_idx]), 2) if p50_all is not None else None
+            entry['price_p90'] = round(float(p90_all[q_idx]), 2) if p90_all is not None else None
+            q_idx += 1
+        results.append(entry)
+    results.sort(key=lambda x: x['hour_num'])
+    return results
 
 def predict_next_day_prices(target_date=None):
     if target_date is None:
         target_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
 
     model = load_model()
-    quantile_models = load_quantile_models()
     if model is None:
         return None
 
@@ -156,57 +180,10 @@ def predict_next_day_prices(target_date=None):
         return None
 
     predictions = predict_hourly(model, features)
-    # Use quantile models (P10/P50/P90) for extended midday hours (9-19) with boundary blending
-    if quantile_models is not None:
-        midday_mask = features['hour'].between(9, 19)
-        if midday_mask.any():
-            import json as _json
-            _qc_path = os.path.join(os.path.dirname(__file__), 'quantile_config.json')
-            if os.path.exists(_qc_path):
-                with open(_qc_path) as _qf:
-                    quantile_features = _json.load(_qf).get('feature_cols', [])
-            else:
-                quantile_features = list(features.columns)
-            available_q = [c for c in quantile_features if c in features.columns]
-            midday_features = features[midday_mask]
-            
-            p10_preds = quantile_models[0.10].predict(midday_features[available_q].values) if 0.10 in quantile_models else None
-            p50_preds = quantile_models[0.50].predict(midday_features[available_q].values) if 0.50 in quantile_models else None
-            p90_preds = quantile_models[0.90].predict(midday_features[available_q].values) if 0.90 in quantile_models else None
-            
-            pred_idx = 0
-            for pos, (idx, row) in enumerate(features.iterrows()):
-                if midday_mask.loc[idx]:
-                    h = features.loc[idx, 'hour']
-                    p50 = p50_preds[pred_idx] if p50_preds is not None else None
-                    p10 = p10_preds[pred_idx] if p10_preds is not None else None
-                    p90 = p90_preds[pred_idx] if p90_preds is not None else None
-                    pred_idx += 1
-                    
-                    # Boundary blending: 9,19 use 50% quantile + 50% ensemble
-                    if h in [9, 19]:
-                        if p50 is not None:
-                            predictions[pos] = 0.5 * p50 + 0.5 * predictions[pos]
-                    else:
-                        if p50 is not None:
-                            predictions[pos] = p50
+    midday_mask = features['hour'].between(9, 19)
+    p10, p50, p90 = _get_quantile_predictions(features, midday_mask)
 
-    results = []
-    for idx, (_, row) in enumerate(features.iterrows()):
-        hour = int(row['hour'])
-        price = float(predictions[idx]) if predictions is not None and idx < len(predictions) else 0
-        results.append({
-            'hour': f"{(hour % 24) + 1:02d}:00",
-            'hour_num': hour,
-            'price': max(price, 0.01),
-            'temperature': round(float(row.get('temperature', 15) if pd.notna(row.get('temperature', 15)) else 15), 1),
-            'humidity': int(row.get('humidity', 50) if pd.notna(row.get('humidity', 50)) else 50),
-            'clouds': int(row.get('clouds', 50) if pd.notna(row.get('clouds', 50)) else 50),
-            'wind_speed': round(float(row.get('wind_speed', 0))),
-            'solar_radiation': round(float(row.get('solar_radiation', 0)), 1)
-        })
-    results.sort(key=lambda x: x['hour_num'])
-    return results
+    return _build_results(features, predictions, p10, p50, p90, midday_mask)
 
 def predict_with_dates(dates):
     model = load_model()
@@ -220,16 +197,9 @@ def predict_with_dates(dates):
             all_predictions[target_date] = []
             continue
         preds = predict_hourly(model, features)
-        results = []
-        for idx, (_, row) in enumerate(features.iterrows()):
-            price = float(preds[idx]) if preds is not None and idx < len(preds) else 0
-            results.append({
-                'hour': f"{int(row['hour']) + 1:02d}:00",
-                'price': max(price, 0.01),
-                'temperature': round(float(row.get('temperature', 15)), 1)
-            })
-        results = sorted(results, key=lambda x: x['hour'])
-        all_predictions[target_date] = results
+        midday_mask = features['hour'].between(9, 19)
+        p10, p50, p90 = _get_quantile_predictions(features, midday_mask)
+        all_predictions[target_date] = _build_results(features, preds, p10, p50, p90, midday_mask)
     return all_predictions
 
 def get_model_stats():
