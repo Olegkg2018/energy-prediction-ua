@@ -103,7 +103,7 @@ def prepare_prediction_features(target_date):
             df['price_rolling_mean_24h'] = df.index.map(lambda x: rolling_24.get(x, 0))
             df['price_rolling_std_24h'] = df.index.map(lambda x: rolling_std_24.get(x, 0))
             df['price_delta_1h'] = df.index.map(lambda x: price_delta.get(x, 0))
-            df['price_vs_yesterday'] = df.apply(lambda r: r['price'] - price_yesterday.get(r['name'], r['price']) if r['name'] in price_yesterday.index else 0, axis=1) if len(price_yesterday) > 0 else 0
+            df['price_vs_yesterday'] = df.index.map(lambda x: (price_series.get(x, 0) - price_yesterday.get(x, 0)) if x in price_yesterday.index and pd.notna(price_yesterday.get(x)) else 0)
             df = df.reset_index(drop=True)
         else:
             df['price_lag_24h'] = 0
@@ -112,7 +112,9 @@ def prepare_prediction_features(target_date):
             df['price_rolling_std_24h'] = 0
             df['price_delta_1h'] = 0
             df['price_vs_yesterday'] = 0
-    except Exception:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         df['price_lag_24h'] = 0
         df['price_lag_168h'] = 0
         df['price_rolling_mean_24h'] = 0
