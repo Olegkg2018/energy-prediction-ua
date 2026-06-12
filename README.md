@@ -5,9 +5,9 @@ XGBoost модель + PuLP оптимізація батареї + Flask веб
 
 ## Можливості
 
-- **Прогноз цін РДН** на добу наперед (XGBoost, 23 фічі)
+- **Прогноз цін РДН** на добу наперед (XGBoost, 43 фічі + квантильні P10/P50/P90 для сонячного drip)
 - **Оптимізація батареї** 1 МВт / 4 МВт·год (PuLP, до 2 циклів/добу для весняно-осінньої duck curve)
-- **Реальні дані OREE** — РДН та ВДР (внутрішньодобовий ринок), 24:00 → наступний день
+- **Реальні дані OREE** — РДН та ВДР (внутрішньодобовий ринок), години 1-24 (00:00-01:00 → 23:00-00:00)
 - **Стан ОЕС** — генерація по типах через ENTSO-E Transparency (АЕС, ТЕС, ГЕС, СЕС, ВЕС)
 - **Індекс ВДЕ** — погода в 5 зонах генерації (Південь, Запоріжжя, Дніпро, Одеса, Карпати), сонячний та вітровий індекс
 - **Прогноз погоди** — OpenWeather OneCall 3.0 (кешування на 3 год), інтерполяція 3→1 год для прогнозу
@@ -16,12 +16,15 @@ XGBoost модель + PuLP оптимізація батареї + Flask веб
 - **Дашборд** — статистика, графіки, аналіз факторів, порівняння прогнозу з реальними цінами OREE
 - **Перетренування моделі** — через `/train` (POST) з очищенням кешу
 
-## Фічі моделі (23 ознаки)
+## Фічі моделі (43 ознаки)
 
-- Базові: `hour`, `dayofweek`, `month`, `day`, `is_weekend`, `is_holiday`, `sin_hour`, `cos_hour`, `sin_month`, `cos_month`, `temperature`, `solar_radiation`
-- ВДЕ: `solar_index`, `wind_index`, `renewable_index`
-- ОЕС: `nuclear_share`, `thermal_share`, `hydro_share`, `solar_share`, `wind_share`, `res_share`, `total_gen_mw`
-- Тренд: `days_since_epoch`
+- **Базові**: `hour`, `dayofweek`, `month`, `day`, `is_weekend`, `is_holiday`, `sin_hour`, `cos_hour`, `sin_month`, `cos_month`, `sin_dayofyear`, `cos_dayofyear`, `sin_hour_of_week`, `cos_hour_of_week`
+- **Погода**: `temperature`, `temperature_squared`, `humidity`, `solar_radiation`
+- **ВДЕ**: `solar_index`, `wind_index`, `renewable_index`
+- **ОЕС**: `nuclear_share`, `thermal_share`, `hydro_share`, `solar_share`, `wind_share`, `res_share`, `total_gen_mw`
+- **Тренд**: `days_since_epoch`
+- **Інтеракції**: `solar_irradiance`, `solar_intensity`, `is_solar_dip_hour`, `demand_proxy`, `cooling_demand`, `heating_demand`, `solar_x_hour`, `wind_x_hour`
+- **Цінові**: `price_lag_24h`, `price_lag_168h`, `price_rolling_mean_24h`, `price_rolling_std_24h`, `price_delta_1h`, `price_vs_yesterday`
 
 ## Швидкий старт
 
@@ -87,12 +90,12 @@ python app.py
 energy-prediction-ua/
 ├── app.py                     # Flask сервер (20+ REST роутів)
 ├── collectors/
-│   ├── oree.py                # Парсинг OREE (РДН + ВДР), 24:00→наст. день
+│   ├── oree.py                # Парсинг OREE (РДН + ВДР), години 1-24 → 0-23
 │   ├── weather.py             # OpenWeather OneCall 3.0 + кеш + інтерполяція
 │   ├── renewable_index.py     # Індекси ВДЕ (5 зон + прогноз)
 │   └── generation_mix.py      # ENTSO-E / Ukrenergo генерація ОЕС
 ├── model/
-│   ├── train.py               # XGBoost навчання (23 фічі)
+│   ├── train.py               # XGBoost навчання (43 фічі + P10/P50/P90 квантилі)
 │   ├── predict.py             # Прогноз на добу + згладжування ±2 год
 │   └── model.pkl              # Натренована модель
 ├── optimizer/

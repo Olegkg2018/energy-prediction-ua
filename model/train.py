@@ -38,9 +38,7 @@ def train_quantile_models(data_df, force=False):
         'hour', 'dayofweek', 'month', 'day',
         'is_weekend', 'is_holiday',
         'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-        'sin_dayofyear', 'cos_dayofyear',
-        'sin_hour_of_week', 'cos_hour_of_week',
-        'temperature', 'temperature_squared',
+        'temperature',
         'humidity',
         'solar_radiation',
         'solar_index', 'wind_index', 'renewable_index',
@@ -49,11 +47,7 @@ def train_quantile_models(data_df, force=False):
         'days_since_epoch',
         'solar_irradiance', 'solar_intensity',
         'is_solar_dip_hour',
-        'demand_proxy', 'cooling_demand', 'heating_demand',
         'price_lag_24h', 'price_lag_168h',
-        'price_rolling_mean_24h', 'price_rolling_std_24h',
-        'price_delta_1h', 'price_vs_yesterday',
-        'solar_x_hour', 'wind_x_hour',
     ]
 
     available = [c for c in feature_cols if c in data_df.columns]
@@ -127,8 +121,7 @@ def train_model(data_df, force=False):
         'sin_dayofyear', 'cos_dayofyear',
         'sin_hour_of_week', 'cos_hour_of_week',
         'temperature', 'temperature_squared',
-        'humidity',
-        'solar_radiation',
+        'humidity', 'solar_radiation',
         'solar_index', 'wind_index', 'renewable_index',
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
@@ -227,9 +220,7 @@ def predict_hourly(model, features_df):
         'hour', 'dayofweek', 'month', 'day',
         'is_weekend', 'is_holiday',
         'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-        'sin_dayofyear', 'cos_dayofyear',
-        'sin_hour_of_week', 'cos_hour_of_week',
-        'temperature', 'temperature_squared',
+        'temperature',
         'humidity',
         'solar_radiation',
         'solar_index', 'wind_index', 'renewable_index',
@@ -238,11 +229,6 @@ def predict_hourly(model, features_df):
         'days_since_epoch',
         'solar_irradiance', 'solar_intensity',
         'is_solar_dip_hour',
-        'demand_proxy', 'cooling_demand', 'heating_demand',
-        'price_lag_24h', 'price_lag_168h',
-        'price_rolling_mean_24h', 'price_rolling_std_24h',
-        'price_delta_1h', 'price_vs_yesterday',
-        'solar_x_hour', 'wind_x_hour',
     ]
     available = [c for c in feature_cols if c in features_df.columns]
     missing = [c for c in feature_cols if c not in features_df.columns]

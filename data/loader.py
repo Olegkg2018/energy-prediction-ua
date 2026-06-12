@@ -195,45 +195,38 @@ def build_features(df):
     df['cos_hour'] = np.cos(2 * np.pi * df['hour'] / 24)
     df['sin_month'] = np.sin(2 * np.pi * df['month'] / 12)
     df['cos_month'] = np.cos(2 * np.pi * df['month'] / 12)
+    df['sin_dayofyear'] = np.sin(2 * np.pi * dt.dt.dayofyear / 365)
+    df['cos_dayofyear'] = np.cos(2 * np.pi * dt.dt.dayofyear / 365)
+    df['sin_hour_of_week'] = np.sin(2 * np.pi * (df['dayofweek'] * 24 + df['hour']) / 168)
+    df['cos_hour_of_week'] = np.cos(2 * np.pi * (df['dayofweek'] * 24 + df['hour']) / 168)
+    if 'temperature' in df.columns:
+        df['temperature_squared'] = df['temperature'] ** 2
+    else:
+        df['temperature_squared'] = 0
     df['days_since_epoch'] = _days_since_epoch(dt)
-
-    # Day-of-year seasonal encoding (captures intra-year patterns better than month)
-    day_of_year = dt.dt.dayofyear
-    df['sin_dayofyear'] = np.sin(2 * np.pi * day_of_year / 365)
-    df['cos_dayofyear'] = np.cos(2 * np.pi * day_of_year / 365)
-
-    # Hour-of-week encoding (captures weekly demand patterns)
-    hour_of_week = df['dayofweek'] * 24 + df['hour']
-    df['sin_hour_of_week'] = np.sin(2 * np.pi * hour_of_week / 168)
-    df['cos_hour_of_week'] = np.cos(2 * np.pi * hour_of_week / 168)
-
     # Demand proxy features
     if 'temperature' in df.columns:
         df['demand_proxy'] = df['temperature'] * (1.2 - 0.4 * df['is_weekend']) * (1 + 0.3 * np.cos(2 * np.pi * (df['hour'] - 19) / 24))
         df['cooling_demand'] = np.maximum(df['temperature'] - 22, 0) * (1 - 0.3 * df['is_weekend'])
         df['heating_demand'] = np.maximum(15 - df['temperature'], 0) * (1 + 0.2 * df['is_weekend'])
-        df['temperature_squared'] = df['temperature'] ** 2
     else:
         df['demand_proxy'] = 0
         df['cooling_demand'] = 0
         df['heating_demand'] = 0
-        df['temperature_squared'] = 0
     if 'solar_radiation' not in df.columns:
         df['solar_radiation'] = 0
     if 'humidity' not in df.columns:
         df['humidity'] = 50
     if 'is_solar_dip_hour' not in df.columns:
         df['is_solar_dip_hour'] = ((df['hour'] >= 10) & (df['hour'] <= 15)).astype(int)
+    df['solar_x_hour'] = df.get('solar_radiation', pd.Series(0, index=df.index)) * df['hour']
+    df['wind_x_hour'] = df.get('wind_index', pd.Series(0, index=df.index)) * df['hour']
     for col in ['solar_index', 'wind_index', 'renewable_index',
                 'nuclear_share', 'thermal_share', 'hydro_share',
                 'solar_share', 'wind_share', 'res_share',
                 'total_gen_mw']:
         if col not in df.columns:
             df[col] = 0
-
-    # Solar-hour interaction features
-    df['solar_x_hour'] = df.get('solar_radiation', 0) * df['hour']
-    df['wind_x_hour'] = df.get('wind_index', 0) * df['hour']
     return df
 
 def get_combined_dataset(use_csv=False):
@@ -321,14 +314,15 @@ def get_combined_dataset(use_csv=False):
         merged = pd.merge(merged, ref_lag[['datetime', col_name]], on='datetime', how='left')
         merged[col_name] = merged[col_name].fillna(merged['price'].mean())
 
-    # Rolling price statistics (mean + volatility over last 24h)
-    merged = merged.sort_values('datetime').reset_index(drop=True)
-    merged['price_rolling_mean_24h'] = merged['price'].rolling(window=24, min_periods=1).mean()
-    merged['price_rolling_std_24h'] = merged['price'].rolling(window=24, min_periods=1).std().fillna(0)
-    # Price change from previous hour
+    merged['price_rolling_mean_24h'] = merged['price'].rolling(24, min_periods=1).mean()
+    merged['price_rolling_std_24h'] = merged['price'].rolling(24, min_periods=1).std().fillna(0)
     merged['price_delta_1h'] = merged['price'].diff(1).fillna(0)
-    # Price vs same hour yesterday (already have price_lag_24h, but explicit delta)
-    merged['price_vs_yesterday'] = (merged['price'] - merged['price_lag_24h']).fillna(0)
+    ref_yesterday = ref.copy()
+    ref_yesterday['datetime'] = ref_yesterday['datetime'] + pd.Timedelta(hours=24)
+    ref_yesterday.rename(columns={'price': 'price_vs_yesterday'}, inplace=True)
+    merged = pd.merge(merged, ref_yesterday[['datetime', 'price_vs_yesterday']], on='datetime', how='left')
+    merged['price_vs_yesterday'] = merged['price_vs_yesterday'].fillna(merged['price'])
+    merged['price_vs_yesterday'] = merged['price'] - merged['price_vs_yesterday']
 
     try:
         os.makedirs(DATA_DIR, exist_ok=True)

@@ -76,43 +76,49 @@ def prepare_prediction_features(target_date):
     df['solar_irradiance'] = df['solar_share'] * df['solar_radiation']
     df['solar_intensity'] = df['solar_share'] * df['sin_hour'].clip(lower=0)
     df['is_solar_dip_hour'] = ((df['hour'] >= 10) & (df['hour'] <= 15)).astype(int)
+    df['solar_x_hour'] = df['solar_radiation'] * df['hour']
+    df['wind_x_hour'] = df['wind_index'] * df['hour']
 
-    # Price lag + rolling features from real OREE data
+    # Price lag features from real OREE data
     try:
         oree_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'oree_prices.feather')
         if os.path.exists(oree_path):
             oree_lags = pd.read_feather(oree_path)[['datetime', 'price']].copy()
             oree_lags['datetime'] = pd.to_datetime(oree_lags['datetime'])
-            oree_lags = oree_lags.drop_duplicates(subset='datetime').sort_values('datetime')
+            oree_lags = oree_lags.drop_duplicates(subset='datetime')
             for lag_hours, col_name in [(24, 'price_lag_24h'), (168, 'price_lag_168h')]:
                 ref = oree_lags.copy()
                 ref['datetime'] = ref['datetime'] + pd.Timedelta(hours=lag_hours)
                 ref.rename(columns={'price': col_name}, inplace=True)
                 df = pd.merge(df, ref[['datetime', col_name]], on='datetime', how='left')
                 df[col_name] = df[col_name].fillna(0)
-            # Rolling stats from real OREE data
-            oree_hist = oree_lags[['datetime', 'price']].copy()
-            oree_hist['price_rolling_mean_24h'] = oree_hist['price'].rolling(window=24, min_periods=1).mean()
-            oree_hist['price_rolling_std_24h'] = oree_hist['price'].rolling(window=24, min_periods=1).std().fillna(0)
-            oree_hist['price_delta_1h'] = oree_hist['price'].diff(1).fillna(0)
-            # For price_vs_yesterday, shift by 24h
-            oree_for_vs = oree_lags[['datetime', 'price']].copy()
-            oree_for_vs['datetime'] = oree_for_vs['datetime'] + pd.Timedelta(hours=24)
-            oree_for_vs.rename(columns={'price': 'price_lag_24h_tmp'}, inplace=True)
-            oree_hist = pd.merge(oree_hist, oree_for_vs, on='datetime', how='left')
-            oree_hist['price_vs_yesterday'] = (oree_hist['price'] - oree_hist['price_lag_24h_tmp']).fillna(0)
-            oree_hist.drop(columns=['price_lag_24h_tmp'], inplace=True)
-            for col in ['price_rolling_mean_24h', 'price_rolling_std_24h', 'price_delta_1h', 'price_vs_yesterday']:
-                df = pd.merge(df, oree_hist[['datetime', col]], on='datetime', how='left')
-                df[col] = df[col].fillna(0)
+
+            oree_sorted = oree_lags.sort_values('datetime').set_index('datetime')
+            df = df.set_index('datetime', drop=False)
+            price_series = oree_sorted['price']
+            rolling_24 = price_series.rolling(24, min_periods=1).mean()
+            rolling_std_24 = price_series.rolling(24, min_periods=1).std().fillna(0)
+            price_delta = price_series.diff(1).fillna(0)
+            price_yesterday = price_series.shift(24)
+            df['price_rolling_mean_24h'] = df.index.map(lambda x: rolling_24.get(x, 0))
+            df['price_rolling_std_24h'] = df.index.map(lambda x: rolling_std_24.get(x, 0))
+            df['price_delta_1h'] = df.index.map(lambda x: price_delta.get(x, 0))
+            df['price_vs_yesterday'] = df.apply(lambda r: r['price'] - price_yesterday.get(r['name'], r['price']) if r['name'] in price_yesterday.index else 0, axis=1) if len(price_yesterday) > 0 else 0
+            df = df.reset_index(drop=True)
         else:
-            for col in ['price_lag_24h', 'price_lag_168h', 'price_rolling_mean_24h',
-                        'price_rolling_std_24h', 'price_delta_1h', 'price_vs_yesterday']:
-                df[col] = 0
+            df['price_lag_24h'] = 0
+            df['price_lag_168h'] = 0
+            df['price_rolling_mean_24h'] = 0
+            df['price_rolling_std_24h'] = 0
+            df['price_delta_1h'] = 0
+            df['price_vs_yesterday'] = 0
     except Exception:
-        for col in ['price_lag_24h', 'price_lag_168h', 'price_rolling_mean_24h',
-                    'price_rolling_std_24h', 'price_delta_1h', 'price_vs_yesterday']:
-            df[col] = 0
+        df['price_lag_24h'] = 0
+        df['price_lag_168h'] = 0
+        df['price_rolling_mean_24h'] = 0
+        df['price_rolling_std_24h'] = 0
+        df['price_delta_1h'] = 0
+        df['price_vs_yesterday'] = 0
 
     return df
 
@@ -158,9 +164,7 @@ def predict_next_day_prices(target_date=None):
                 'hour', 'dayofweek', 'month', 'day',
                 'is_weekend', 'is_holiday',
                 'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-                'sin_dayofyear', 'cos_dayofyear',
-                'sin_hour_of_week', 'cos_hour_of_week',
-                'temperature', 'temperature_squared',
+                'temperature',
                 'humidity',
                 'solar_radiation',
                 'solar_index', 'wind_index', 'renewable_index',
@@ -169,11 +173,7 @@ def predict_next_day_prices(target_date=None):
                 'days_since_epoch',
                 'solar_irradiance', 'solar_intensity',
                 'is_solar_dip_hour',
-                'demand_proxy', 'cooling_demand', 'heating_demand',
                 'price_lag_24h', 'price_lag_168h',
-                'price_rolling_mean_24h', 'price_rolling_std_24h',
-                'price_delta_1h', 'price_vs_yesterday',
-                'solar_x_hour', 'wind_x_hour',
             ]
             available_q = [c for c in quantile_features if c in features.columns]
             midday_features = features[midday_mask]
@@ -183,7 +183,7 @@ def predict_next_day_prices(target_date=None):
             p90_preds = quantile_models[0.90].predict(midday_features[available_q].values) if 0.90 in quantile_models else None
             
             pred_idx = 0
-            for idx in features.index:
+            for pos, (idx, row) in enumerate(features.iterrows()):
                 if midday_mask.loc[idx]:
                     h = features.loc[idx, 'hour']
                     p50 = p50_preds[pred_idx] if p50_preds is not None else None
@@ -194,10 +194,10 @@ def predict_next_day_prices(target_date=None):
                     # Boundary blending: 9,19 use 50% quantile + 50% ensemble
                     if h in [9, 19]:
                         if p50 is not None:
-                            predictions[idx] = 0.5 * p50 + 0.5 * predictions[idx]
+                            predictions[pos] = 0.5 * p50 + 0.5 * predictions[pos]
                     else:
                         if p50 is not None:
-                            predictions[idx] = p50
+                            predictions[pos] = p50
 
     results = []
     for idx, (_, row) in enumerate(features.iterrows()):
