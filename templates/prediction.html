@@ -134,10 +134,10 @@ function chartH(desktop) {
 let oreeCache = null;
 
 document.addEventListener('DOMContentLoaded', function() {
-    loadPrediction();
-    loadOreePricesCache();
     loadOreePrices();
     loadManualFactors();
+    // Load OREE cache first, then prediction (avoids race condition in comparison)
+    loadOreePricesCache().then(loadPrediction);
 });
 
 function getBatteryParams() {
@@ -149,7 +149,7 @@ function getBatteryParams() {
 }
 
 function loadOreePricesCache() {
-    fetch('/api/oree_prices')
+    return fetch('/api/oree_prices')
         .then(r => r.json())
         .then(data => {
             if (data.success) oreeCache = data.prices;

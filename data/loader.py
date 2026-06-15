@@ -76,6 +76,8 @@ def generate_synthetic_weather_for_range(start_date, end_date):
             cloud_factor = 1 - (clouds / 100) * 0.75
             solar = max(0, clear_sky * cloud_factor)
         humidity = int(np.clip(np.random.normal(70 - 15 * np.sin(np.pi * (hour - 6) / 12), 15), 30, 95))
+        wind_base = 4 + 2 * np.sin(np.pi * (month - 1) / 6)
+        wind_speed = round(abs(np.random.normal(wind_base, 2)), 1)
         rows.append({
             'datetime': ts,
             'date': ts.strftime('%Y-%m-%d'),
@@ -84,6 +86,7 @@ def generate_synthetic_weather_for_range(start_date, end_date):
             'humidity': humidity,
             'clouds': clouds,
             'solar_radiation': round(solar, 1),
+            'wind_speed': wind_speed,
         })
         ts += timedelta(hours=1)
     return pd.DataFrame(rows)
@@ -195,6 +198,14 @@ def build_features(df):
     df['cos_hour'] = np.cos(2 * np.pi * df['hour'] / 24)
     df['sin_month'] = np.sin(2 * np.pi * df['month'] / 12)
     df['cos_month'] = np.cos(2 * np.pi * df['month'] / 12)
+    df['sin_dayofyear'] = np.sin(2 * np.pi * dt.dt.dayofyear / 365)
+    df['cos_dayofyear'] = np.cos(2 * np.pi * dt.dt.dayofyear / 365)
+    df['sin_hour_of_week'] = np.sin(2 * np.pi * (df['dayofweek'] * 24 + df['hour']) / 168)
+    df['cos_hour_of_week'] = np.cos(2 * np.pi * (df['dayofweek'] * 24 + df['hour']) / 168)
+    if 'temperature' in df.columns:
+        df['temperature_squared'] = df['temperature'] ** 2
+    else:
+        df['temperature_squared'] = 0
     df['days_since_epoch'] = _days_since_epoch(dt)
     # Demand proxy features
     if 'temperature' in df.columns:
@@ -211,6 +222,8 @@ def build_features(df):
         df['humidity'] = 50
     if 'is_solar_dip_hour' not in df.columns:
         df['is_solar_dip_hour'] = ((df['hour'] >= 10) & (df['hour'] <= 15)).astype(int)
+    df['solar_x_hour'] = df.get('solar_radiation', pd.Series(0, index=df.index)) * df['hour']
+    df['wind_x_hour'] = df.get('wind_index', pd.Series(0, index=df.index)) * df['hour']
     for col in ['solar_index', 'wind_index', 'renewable_index',
                 'nuclear_share', 'thermal_share', 'hydro_share',
                 'solar_share', 'wind_share', 'res_share',
@@ -303,6 +316,16 @@ def get_combined_dataset(use_csv=False):
         ref_lag.rename(columns={'price': col_name}, inplace=True)
         merged = pd.merge(merged, ref_lag[['datetime', col_name]], on='datetime', how='left')
         merged[col_name] = merged[col_name].fillna(merged['price'].mean())
+
+    merged['price_rolling_mean_24h'] = merged['price'].rolling(24, min_periods=1).mean()
+    merged['price_rolling_std_24h'] = merged['price'].rolling(24, min_periods=1).std().fillna(0)
+    merged['price_delta_1h'] = merged['price'].diff(1).fillna(0)
+    ref_yesterday = ref.copy()
+    ref_yesterday['datetime'] = ref_yesterday['datetime'] + pd.Timedelta(hours=24)
+    ref_yesterday.rename(columns={'price': 'price_vs_yesterday'}, inplace=True)
+    merged = pd.merge(merged, ref_yesterday[['datetime', 'price_vs_yesterday']], on='datetime', how='left')
+    merged['price_vs_yesterday'] = merged['price_vs_yesterday'].fillna(merged['price'])
+    merged['price_vs_yesterday'] = merged['price'] - merged['price_vs_yesterday']
 
     try:
         os.makedirs(DATA_DIR, exist_ok=True)

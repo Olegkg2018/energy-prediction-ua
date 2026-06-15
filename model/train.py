@@ -2,7 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 import joblib
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import xgboost as xgb
 
@@ -38,16 +38,21 @@ def train_quantile_models(data_df, force=False):
         'hour', 'dayofweek', 'month', 'day',
         'is_weekend', 'is_holiday',
         'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-        'temperature',
-        'humidity',
-        'solar_radiation',
+        'sin_dayofyear', 'cos_dayofyear',
+        'sin_hour_of_week', 'cos_hour_of_week',
+        'temperature', 'temperature_squared',
+        'humidity', 'solar_radiation',
         'solar_index', 'wind_index', 'renewable_index',
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
         'days_since_epoch',
         'solar_irradiance', 'solar_intensity',
         'is_solar_dip_hour',
+        'demand_proxy', 'cooling_demand', 'heating_demand',
         'price_lag_24h', 'price_lag_168h',
+        'price_rolling_mean_24h', 'price_rolling_std_24h',
+        'price_delta_1h', 'price_vs_yesterday',
+        'solar_x_hour', 'wind_x_hour',
     ]
 
     available = [c for c in feature_cols if c in data_df.columns]
@@ -59,18 +64,19 @@ def train_quantile_models(data_df, force=False):
     X = df[available].values
     y = df['price'].values
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.15, random_state=42, shuffle=True
-    )
+    # TEMPORAL split: train on first 85%, test on last 15% (no shuffle = no future leak)
+    split_idx = int(len(X) * 0.85)
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
 
     quantiles = [0.10, 0.50, 0.90]
     for quantile in quantiles:
         model = xgb.XGBRegressor(
             objective='reg:quantileerror',
             quantile_alpha=quantile,
-            n_estimators=500,
-            max_depth=6,
-            learning_rate=0.05,
+            n_estimators=800,
+            max_depth=8,
+            learning_rate=0.03,
             subsample=0.8,
             colsample_bytree=0.8,
             reg_alpha=1.0,
@@ -118,15 +124,21 @@ def train_model(data_df, force=False):
         'hour', 'dayofweek', 'month', 'day',
         'is_weekend', 'is_holiday',
         'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-        'temperature',
-        'humidity',
-        'solar_radiation',
+        'sin_dayofyear', 'cos_dayofyear',
+        'sin_hour_of_week', 'cos_hour_of_week',
+        'temperature', 'temperature_squared',
+        'humidity', 'solar_radiation',
         'solar_index', 'wind_index', 'renewable_index',
         'nuclear_share', 'thermal_share', 'hydro_share',
         'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
         'days_since_epoch',
         'solar_irradiance', 'solar_intensity',
         'is_solar_dip_hour',
+        'demand_proxy', 'cooling_demand', 'heating_demand',
+        'price_lag_24h', 'price_lag_168h',
+        'price_rolling_mean_24h', 'price_rolling_std_24h',
+        'price_delta_1h', 'price_vs_yesterday',
+        'solar_x_hour', 'wind_x_hour',
     ]
 
     available = [c for c in feature_cols if c in data_df.columns]
@@ -137,14 +149,15 @@ def train_model(data_df, force=False):
     X = df[available].values
     y = df['price'].values
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.15, random_state=42, shuffle=True
-    )
+    # TEMPORAL split: train on first 85%, test on last 15% (no shuffle = no future leak)
+    split_idx = int(len(X) * 0.85)
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
 
     xgb_model = xgb.XGBRegressor(
-        n_estimators=500,
-        max_depth=6,
-        learning_rate=0.05,
+        n_estimators=800,
+        max_depth=8,
+        learning_rate=0.03,
         subsample=0.8,
         colsample_bytree=0.8,
         reg_alpha=1.0,

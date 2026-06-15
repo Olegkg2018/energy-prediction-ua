@@ -50,11 +50,7 @@ def fetch_month_prices(year, month, market='DAM', zone='IPS'):
                     melted['price'] = pd.to_numeric(melted['price'], errors='coerce')
                     melted.dropna(subset=['hour', 'price'], inplace=True)
                     melted['hour'] = melted['hour'].astype(int)
-                    mask_24 = melted['hour'] == 24
-                    melted.loc[mask_24, 'hour'] = 0
-                    melted.loc[mask_24, 'date'] = (
-                        pd.to_datetime(melted.loc[mask_24, 'date'], dayfirst=True) + pd.Timedelta(days=1)
-                    ).dt.strftime('%d.%m.%Y')
+                    melted['hour'] = melted['hour'] - 1
                     melted['date'] = melted['date'].astype(str).str.strip()
                     if '.' in str(melted['date'].iloc[0]):
                         melted['datetime'] = pd.to_datetime(melted['date'] + ' ' + melted['hour'].astype(str) + ':00:00', dayfirst=True, errors='coerce')
@@ -216,7 +212,7 @@ def get_sample_prices(days=30):
     return sample
 
 def update_oree_prices():
-    """Fetch OREE prices from 2026-01-01 onwards, filling gaps in cache."""
+    """Fetch OREE prices from 2025-12-01 onwards, filling gaps in cache."""
     existing = get_cached_oree_prices()
     existing_months = set()
     if existing is not None and len(existing) > 0:
@@ -224,12 +220,24 @@ def update_oree_prices():
 
     today = datetime.now()
     target_months = set()
-    # Start from Dec 2025 to provide hour-0 mapping for Jan 1, 2026
     d = pd.Timestamp('2025-12-01')
     end = pd.Timestamp(today.year, today.month, 1)
     while d <= end:
         target_months.add(d.to_period('M'))
         d += pd.DateOffset(months=1)
+
+    # If the last cached day is within the last 3 days and has < 24 hours,
+    # re-fetch the current month (it may be incomplete)
+    if existing is not None and len(existing) > 0:
+        last_dt = pd.to_datetime(existing['datetime']).max()
+        last_date = last_dt.date()
+        today_date = today.date()
+        three_days_ago = today_date - timedelta(days=3)
+        if three_days_ago <= last_date <= today_date + timedelta(days=1):
+            hours_on_last_date = existing[pd.to_datetime(existing['datetime']).dt.date == last_date]
+            if len(hours_on_last_date) < 24:
+                current_month = pd.Timestamp(today.year, today.month, 1).to_period('M')
+                existing_months.discard(current_month)
 
     missing = sorted(target_months - existing_months)
     if not missing and existing is not None:
