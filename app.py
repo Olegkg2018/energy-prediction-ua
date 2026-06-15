@@ -82,6 +82,20 @@ def train():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/cross_validate', methods=['POST'])
+def api_cross_validate():
+    try:
+        from model.train import cross_validate_timeseries
+        clear_cache()
+        data = get_combined_dataset()
+        n_splits = request.json.get('n_splits', 5) if request.is_json else 5
+        result = cross_validate_timeseries(data, n_splits=n_splits)
+        if result is None:
+            return jsonify({'success': False, 'error': 'Недостатньо даних для CV'})
+        return jsonify({'success': True, 'cv_result': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/about')
 def about_page():
     model_info = get_model_stats()

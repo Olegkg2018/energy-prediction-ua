@@ -265,16 +265,40 @@ def get_combined_dataset(use_csv=False):
     min_year = min(years)
     max_year = max(years)
 
-    weather = generate_synthetic_weather_for_range(price_min_date, price_max_date)
+    # Try real historical weather from Open-Meteo first
+    try:
+        from collectors.historical_weather import get_historical_weather, compute_renewable_indices_from_weather
+        real_weather = get_historical_weather(price_min_date, price_max_date)
+        if real_weather is not None and len(real_weather) > 1000:
+            print(f'[LOADER] Using REAL weather data: {len(real_weather)} rows')
+            weather = real_weather
+            # Compute renewable indices from real weather
+            real_renewable = compute_renewable_indices_from_weather(real_weather)
+            use_real_renewable = True
+        else:
+            print('[LOADER] Real weather unavailable, falling back to synthetic')
+            weather = generate_synthetic_weather_for_range(price_min_date, price_max_date)
+            use_real_renewable = False
+    except Exception as e:
+        print(f'[LOADER] Weather import error: {e}, using synthetic')
+        weather = generate_synthetic_weather_for_range(price_min_date, price_max_date)
+        use_real_renewable = False
+
     merged = pd.merge(prices, weather, on=['datetime', 'date', 'hour'], how='left')
     merged['temperature'] = merged['temperature'].interpolate(limit_direction='both')
     if 'humidity' in merged.columns:
         merged['humidity'] = merged['humidity'].interpolate(limit_direction='both')
+    if 'clouds' not in merged.columns:
+        merged['clouds'] = 50
 
     oree_years = set(pd.to_datetime(prices['datetime']).dt.year)
-    renewable = generate_synthetic_renewable_for_range(min(oree_years), max(oree_years))
-    merged = pd.merge(merged, renewable[['datetime', 'solar_index', 'wind_index', 'renewable_index']],
-                      on='datetime', how='left')
+    if use_real_renewable:
+        merged = pd.merge(merged, real_renewable[['datetime', 'solar_index', 'wind_index', 'renewable_index']],
+                          on='datetime', how='left')
+    else:
+        renewable = generate_synthetic_renewable_for_range(min(oree_years), max(oree_years))
+        merged = pd.merge(merged, renewable[['datetime', 'solar_index', 'wind_index', 'renewable_index']],
+                          on='datetime', how='left')
     for c in ['solar_index', 'wind_index', 'renewable_index']:
         merged[c] = merged[c].fillna(0)
 
