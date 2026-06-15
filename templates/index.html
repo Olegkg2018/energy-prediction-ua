@@ -4,7 +4,7 @@
 <div class="row">
     <div class="col">
         <div class="card">
-            <h2>Статистика даних 2025</h2>
+            <h2>Статистика даних</h2>
             <div class="stats-grid">
                 <div class="stat">
                     <span class="stat-label">Період</span>
@@ -84,30 +84,11 @@
 <div class="row">
     <div class="col">
         <div class="card">
-            <h2>Прогноз на завтра (швидкий перегляд)</h2>
-            <div id="quick-chart" style="height: 400px;"></div>
-            <div id="quick-table"></div>
-        </div>
-    </div>
-</div>
-
-<div class="row">
-    <div class="col">
-        <div class="card">
             <h2>Стан ОЕС (генерація по типах)</h2>
             <div id="genmix-stats" class="stats-grid">
                 <p>Завантаження...</p>
             </div>
             <div id="genmix-chart" style="height: 200px; margin-top: 1rem;"></div>
-        </div>
-    </div>
-</div>
-
-<div class="row">
-    <div class="col">
-        <div class="card">
-            <h2>Індекс генерації ВДЕ</h2>
-            <div id="renewable-zones" class="stats-grid"></div>
         </div>
     </div>
 </div>
@@ -152,11 +133,9 @@ function chartH(desktop) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    loadQuickPrediction();
     loadFactors();
     loadSurplusHistory();
     loadGenerationMix();
-    loadRenewableIndex();
 });
 
 function retrainModel() {
@@ -192,50 +171,6 @@ function fetchOreeData() {
         .catch(e => {
             el.textContent = 'Помилка з\'єднання';
             el.style.color = '#f44336';
-        });
-}
-
-function loadQuickPrediction() {
-    const dates = [];
-    const today = new Date();
-    for (let i = 1; i <= 3; i++) {
-        const d = new Date(today);
-        d.setDate(d.getDate() + i);
-        dates.push(d.toISOString().split('T')[0]);
-    }
-
-    fetch(`/api/predict_multi?dates=${dates.join(',')}`)
-        .then(r => r.json())
-        .then(data => {
-            if (!data.success) {
-                document.getElementById('quick-chart').innerHTML = '<p>Немає прогнозу. Спочатку навчіть модель.</p>';
-                return;
-            }
-            const traces = [];
-            for (const [date, preds] of Object.entries(data.predictions)) {
-                if (!preds || preds.length === 0) continue;
-                const hours = preds.map(p => p.hour);
-                const prices = preds.map(p => p.price);
-                traces.push({
-                    x: hours,
-                    y: prices,
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    name: date
-                });
-            }
-            if (traces.length > 0) {
-                const m = window.innerWidth < 600;
-                Plotly.newPlot('quick-chart', traces, {
-                    title: 'Прогноз цін на найближчі дні',
-                    xaxis: { title: 'Година', dtick: m ? 4 : 2 },
-                    yaxis: { title: 'Ціна, грн/МВт·год' },
-                    height: chartH(400),
-                    margin: { t: m ? 30 : 40, r: m ? 10 : 20, b: m ? 30 : 40, l: m ? 40 : 60 },
-                    responsive: true,
-                    autosize: true
-                });
-            }
         });
 }
 
@@ -356,54 +291,6 @@ function loadGenerationMix() {
                 autosize: true,
                 showlegend: false,
             });
-        });
-}
-
-function loadRenewableIndex() {
-    fetch('/api/renewable_index')
-        .then(r => r.json())
-        .then(data => {
-            if (!data.success) return;
-            const container = document.getElementById('renewable-zones');
-            const zones = data.zones || {};
-            let html = '';
-            for (const [key, z] of Object.entries(zones)) {
-                if (!z.data || z.data.length === 0) continue;
-                const last = z.data[z.data.length - 1];
-                html += `
-                    <div class="stat">
-                        <span class="stat-label">${z.label}</span>
-                        <span class="stat-value" style="font-size: 0.85rem">
-                            ☀️ ${last.solar_gen_index} · 💨 ${last.wind_gen_index}
-                        </span>
-                    </div>
-                `;
-            }
-            if (data.forecast && data.forecast.length > 0) {
-                const f = data.forecast;
-                const hours = f.map(r => `${r.hour}:00`);
-                const solar = f.map(r => r.solar_index || 0);
-                const wind = f.map(r => (r.wind_index || 0) * 500);
-                const total = f.map(r => r.renewable_index || 0);
-                container.innerHTML = html + `<div id="renewable-chart" style="grid-column: 1 / -1; height: 200px;"></div>`;
-                const m = window.innerWidth < 600;
-                Plotly.newPlot('renewable-chart', [
-                    {x: hours, y: solar, type: 'scatter', mode: 'lines', name: '☀️ Сонячний індекс (СЕС)', marker: {color: '#FFC107'}},
-                    {x: hours, y: wind, type: 'scatter', mode: 'lines', name: '💨 Вітровий індекс (ВЕС)', marker: {color: '#2196F3'}},
-                    {x: hours, y: total, type: 'scatter', mode: 'lines', name: '🌱 Сумарний ВДЕ', marker: {color: '#4CAF50'}},
-                ], {
-                    title: 'Індекс генерації ВДЕ (прогноз)',
-                    xaxis: {title: 'Година', dtick: m ? 4 : 2},
-                    yaxis: {title: 'Індекс'},
-                    height: chartH(220),
-                    margin: {t: m ? 20 : 30, r: m ? 10 : 20, b: m ? 30 : 50, l: m ? 40 : 50},
-                    responsive: true,
-                    autosize: true,
-                    legend: {orientation: 'h', y: -0.3, x: 0}
-                });
-            } else {
-                container.innerHTML = html || '<p>Дані недоступні</p>';
-            }
         });
 }
 
