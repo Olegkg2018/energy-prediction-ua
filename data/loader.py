@@ -16,6 +16,12 @@ HOLIDAYS_2025 = [
     '2025-05-01', '2025-05-05', '2025-05-06', '2025-06-08',
     '2025-06-28', '2025-08-24', '2025-10-14', '2025-12-25'
 ]
+HOLIDAYS_2026 = [
+    '2026-01-01', '2026-01-07', '2026-03-08', '2026-04-12',
+    '2026-05-01', '2026-05-04', '2026-05-05', '2026-06-07',
+    '2026-06-28', '2026-08-24', '2026-10-12', '2026-12-25'
+]
+ALL_HOLIDAYS = set(HOLIDAYS_2025 + HOLIDAYS_2026)
 
 def load_oree_prices():
     if not os.path.exists(OREE_CACHE):
@@ -193,7 +199,7 @@ def build_features(df):
     df['month'] = dt.dt.month
     df['day'] = dt.dt.day
     df['is_weekend'] = df['dayofweek'].isin([5, 6]).astype(int)
-    df['is_holiday'] = dt.dt.strftime('%Y-%m-%d').isin(HOLIDAYS_2025).astype(int)
+    df['is_holiday'] = dt.dt.strftime('%Y-%m-%d').isin(ALL_HOLIDAYS).astype(int)
     df['sin_hour'] = np.sin(2 * np.pi * df['hour'] / 24)
     df['cos_hour'] = np.cos(2 * np.pi * df['hour'] / 24)
     df['sin_month'] = np.sin(2 * np.pi * df['month'] / 12)
@@ -202,6 +208,23 @@ def build_features(df):
     df['cos_dayofyear'] = np.cos(2 * np.pi * dt.dt.dayofyear / 365)
     df['sin_hour_of_week'] = np.sin(2 * np.pi * (df['dayofweek'] * 24 + df['hour']) / 168)
     df['cos_hour_of_week'] = np.cos(2 * np.pi * (df['dayofweek'] * 24 + df['hour']) / 168)
+
+    df['is_month_start'] = dt.dt.is_month_start.astype(int)
+    df['is_month_end'] = dt.dt.is_month_end.astype(int)
+    df['is_quarter_start'] = dt.dt.is_quarter_start.astype(int)
+    df['is_quarter_end'] = dt.dt.is_quarter_end.astype(int)
+    df['day_of_month'] = dt.dt.day
+    df['week_of_year'] = dt.dt.isocalendar().week.astype(int)
+    df['is_week_before_holiday'] = 0
+    for h in ALL_HOLIDAYS:
+        hdate = pd.Timestamp(h)
+        mask = (dt >= hdate - pd.Timedelta(days=7)) & (dt < hdate)
+        df.loc[mask, 'is_week_before_holiday'] = 1
+
+    df['season'] = df['month'].map({12: 0, 1: 0, 2: 0, 3: 1, 4: 1, 5: 1,
+                                     6: 2, 7: 2, 8: 2, 9: 3, 10: 3, 11: 3})
+    df['is_heating_season'] = df['month'].isin([10, 11, 12, 1, 2, 3]).astype(int)
+    df['is_cooling_season'] = df['month'].isin([5, 6, 7, 8, 9]).astype(int)
     if 'temperature' in df.columns:
         df['temperature_squared'] = df['temperature'] ** 2
     else:
@@ -324,6 +347,43 @@ def get_combined_dataset(use_csv=False):
     merged['solar_irradiance'] = merged['solar_share'] * merged.get('solar_radiation', 0)
     merged['solar_intensity'] = merged['solar_share'] * merged['sin_hour'].clip(lower=0)
     merged['is_solar_dip_hour'] = ((merged['hour'] >= 10) & (merged['hour'] <= 15)).astype(int)
+
+    # Gas prices (TTF + НАФТОГАЗ)
+    try:
+        from collectors.gas_prices import get_gas_prices
+        gas_df = get_gas_prices()
+        if gas_df is not None and len(gas_df) > 0:
+            gas_df['date'] = pd.to_datetime(gas_df['datetime']).dt.strftime('%Y-%m-%d')
+            gas_cols = ['ttf_eur_mwh', 'ttf_usd_mwh', 'nafotogaz_uah_thm3', 'gas_uah_mwh', 'gas_usd_mwh']
+            merged = pd.merge(merged, gas_df[['date'] + gas_cols], on='date', how='left')
+            for c in gas_cols:
+                if c in merged.columns:
+                    merged[c] = merged[c].ffill().bfill()
+                    merged[f'{c}_lag7'] = merged[c].shift(7).ffill().fillna(merged[c].mean())
+                    merged[f'{c}_rolling7'] = merged[c].rolling(7, min_periods=1).mean()
+            print(f'[LOADER] Gas prices integrated: {len(gas_df)} days')
+    except Exception as e:
+        print(f'[LOADER] Gas prices not available: {e}')
+
+    # ВДР-РДН spread
+    try:
+        idm_path = os.path.join(os.path.dirname(DATA_DIR), 'data', 'idm_prices.feather')
+        if os.path.exists(idm_path):
+            idm = pd.read_feather(idm_path)
+            idm['datetime'] = pd.to_datetime(idm['datetime'])
+            idm = idm.rename(columns={'price': 'idm_price'})
+            oree_for_spread = merged[['datetime', 'price']].copy()
+            oree_for_spread = oree_for_spread.rename(columns={'price': 'dam_price'})
+            spread_data = pd.merge(oree_for_spread, idm[['datetime', 'idm_price']], on='datetime', how='inner')
+            spread_data['vrd_rdn_spread'] = spread_data['idm_price'] - spread_data['dam_price']
+            spread_data['vrd_rdn_ratio'] = spread_data['idm_price'] / spread_data['dam_price'].clip(lower=1)
+            merged = pd.merge(merged, spread_data[['datetime', 'vrd_rdn_spread', 'vrd_rdn_ratio']],
+                              on='datetime', how='left')
+            merged['vrd_rdn_spread'] = merged['vrd_rdn_spread'].fillna(0)
+            merged['vrd_rdn_ratio'] = merged['vrd_rdn_ratio'].fillna(1.0)
+            print(f'[LOADER] ВДР-РДН spread integrated: {len(spread_data)} rows')
+    except Exception as e:
+        print(f'[LOADER] ВДР-РДН spread not available: {e}')
     # Only apply synthetic solar dip scaling to non-real data
     syn_mask = merged['source'] == 'synthetic'
     merged.loc[syn_mask, 'price'] = \

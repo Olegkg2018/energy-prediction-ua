@@ -103,7 +103,7 @@ def fetch_month_idm_prices(year, month, zone='IPS'):
 
 def scrape_idm_prices(date_from=None, date_to=None):
     if date_from is None:
-        date_from = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        date_from = '2025-01-01'
     if date_to is None:
         date_to = datetime.now().strftime('%Y-%m-%d')
     fd = datetime.strptime(date_from, '%Y-%m-%d')
@@ -220,7 +220,7 @@ def update_oree_prices():
 
     today = datetime.now()
     target_months = set()
-    d = pd.Timestamp('2025-12-01')
+    d = pd.Timestamp('2025-01-01')
     end = pd.Timestamp(today.year, today.month, 1)
     while d <= end:
         target_months.add(d.to_period('M'))

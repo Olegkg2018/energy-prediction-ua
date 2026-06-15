@@ -54,6 +54,11 @@ def train_quantile_models(data_df, force=False):
         'price_rolling_mean_24h', 'price_rolling_std_24h',
         'price_delta_1h', 'price_vs_yesterday',
         'solar_x_hour', 'wind_x_hour',
+        'ttf_eur_mwh', 'gas_uah_mwh',
+        'vrd_rdn_spread',
+        'is_month_start', 'is_month_end',
+        'day_of_month', 'week_of_year',
+        'season', 'is_heating_season', 'is_cooling_season',
     ]
 
     available = [c for c in feature_cols if c in data_df.columns]
@@ -134,6 +139,11 @@ def cross_validate_timeseries(data_df, n_splits=5):
         'price_rolling_mean_24h', 'price_rolling_std_24h',
         'price_delta_1h', 'price_vs_yesterday',
         'solar_x_hour', 'wind_x_hour',
+        'ttf_eur_mwh', 'gas_uah_mwh',
+        'vrd_rdn_spread',
+        'is_month_start', 'is_month_end',
+        'day_of_month', 'week_of_year',
+        'season', 'is_heating_season', 'is_cooling_season',
     ]
 
     available = [c for c in feature_cols if c in data_df.columns]
@@ -224,6 +234,11 @@ def train_model(data_df, force=False):
         'price_rolling_mean_24h', 'price_rolling_std_24h',
         'price_delta_1h', 'price_vs_yesterday',
         'solar_x_hour', 'wind_x_hour',
+        'ttf_eur_mwh', 'gas_uah_mwh',
+        'vrd_rdn_spread',
+        'is_month_start', 'is_month_end',
+        'day_of_month', 'week_of_year',
+        'season', 'is_heating_season', 'is_cooling_season',
     ]
 
     available = [c for c in feature_cols if c in data_df.columns]

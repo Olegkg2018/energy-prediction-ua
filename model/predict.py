@@ -172,6 +172,48 @@ def prepare_prediction_features(target_date):
     df['solar_x_hour'] = df['solar_radiation'] * df['hour']
     df['wind_x_hour'] = df['wind_index'] * df['hour']
 
+    # --- Gas prices for target date ---
+    try:
+        from collectors.gas_prices import get_gas_price_for_date
+        gas = get_gas_price_for_date(target_date)
+        if gas:
+            for c in ['ttf_eur_mwh', 'gas_uah_mwh']:
+                df[c] = gas.get(c, 0)
+        else:
+            df['ttf_eur_mwh'] = 35.0
+            df['gas_uah_mwh'] = 9.0
+    except Exception:
+        df['ttf_eur_mwh'] = 35.0
+        df['gas_uah_mwh'] = 9.0
+
+    # --- ВДР-РДН spread (use last known) ---
+    try:
+        idm_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'idm_prices.feather')
+        if os.path.exists(idm_path):
+            idm = pd.read_feather(idm_path)
+            idm['datetime'] = pd.to_datetime(idm['datetime'])
+            oree_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'oree_prices.feather')
+            if os.path.exists(oree_path):
+                oree = pd.read_feather(oree_path)
+                oree['datetime'] = pd.to_datetime(oree['datetime'])
+                spread = pd.merge(
+                    oree[['datetime', 'price']].rename(columns={'price': 'dam'}),
+                    idm[['datetime', 'price']].rename(columns={'price': 'vdr'}),
+                    on='datetime', how='inner'
+                )
+                spread['vrd_rdn_spread'] = spread['vdr'] - spread['dam']
+                last_spread = spread[spread['datetime'] < pred_date]['vrd_rdn_spread']
+                if len(last_spread) > 0:
+                    df['vrd_rdn_spread'] = float(last_spread.mean())
+                else:
+                    df['vrd_rdn_spread'] = 0
+            else:
+                df['vrd_rdn_spread'] = 0
+        else:
+            df['vrd_rdn_spread'] = 0
+    except Exception:
+        df['vrd_rdn_spread'] = 0
+
     # --- Price lag features (NO look-ahead: exclude target date) ---
     try:
         oree_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'oree_prices.feather')
