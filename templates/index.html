@@ -73,6 +73,10 @@
                 Перетренувати модель
             </button>
             <span id="train-status" style="margin-left: 1rem"></span>
+            <button class="btn btn-secondary" onclick="fetchOreeData()" style="margin-top: 1rem; margin-left: 0.5rem">
+                Завантажити дані OREE
+            </button>
+            <span id="oree-status" style="margin-left: 1rem"></span>
         </div>
     </div>
 </div>
@@ -166,6 +170,28 @@ function retrainModel() {
             } else {
                 document.getElementById('train-status').textContent = `Помилка: ${d.error}`;
             }
+        });
+}
+
+function fetchOreeData() {
+    const el = document.getElementById('oree-status');
+    el.textContent = 'Завантаження...';
+    el.style.color = '';
+    fetch('/api/fetch_oree')
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) {
+                el.textContent = d.message + (d.date_range ? ` (${d.date_range})` : '');
+                el.style.color = '#4caf50';
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                el.textContent = 'Помилка: ' + (d.error || 'невідома');
+                el.style.color = '#f44336';
+            }
+        })
+        .catch(e => {
+            el.textContent = 'Помилка з\'єднання';
+            el.style.color = '#f44336';
         });
 }
 

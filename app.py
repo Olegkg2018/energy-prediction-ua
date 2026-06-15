@@ -22,7 +22,7 @@ if os.path.exists(_env_path):
 from data.loader import get_combined_dataset, get_data_statistics, clear_cache
 from model.train import train_model, load_model
 from model.predict import predict_next_day_prices, get_model_stats, predict_with_dates
-from collectors.oree import get_last_7days_prices, update_oree_prices, get_latest_idm_prices
+from collectors.oree import get_last_7days_prices, update_oree_prices, get_latest_idm_prices, get_cached_oree_prices, fetch_month_prices
 from collectors.weather import get_forecast, get_forecast_for_dates
 from collectors.renewable_index import get_renewable_indices, get_zone_details, get_renewable_forecast
 from collectors.generation_mix import get_generation_stats, get_generation_timeseries
@@ -486,6 +486,45 @@ def api_refresh_data():
     except Exception:
         pass
     return jsonify({'success': True, 'message': 'Дані оновлено'})
+
+@app.route('/api/fetch_oree')
+def api_fetch_oree():
+    try:
+        cached = get_cached_oree_prices()
+        if cached is not None and len(cached) > 0:
+            last_date = pd.to_datetime(cached['datetime']).max()
+            start_from = (last_date + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+        else:
+            start_from = '2025-12-01'
+        today = datetime.now().strftime('%Y-%m-%d')
+        today_dt = pd.Timestamp.today()
+        target_end = pd.Timestamp(today_dt.year, today_dt.month, 1)
+        from collectors.oree import fetch_month_prices as _fetch, scrape_oree_prices
+        new_data = scrape_oree_prices(date_from=start_from, date_to=today)
+        if new_data is not None and len(new_data) > 0:
+            if cached is not None and len(cached) > 0:
+                combined = pd.concat([cached, new_data]).drop_duplicates(subset=['datetime']).sort_values('datetime')
+            else:
+                combined = new_data
+            combined.reset_index(drop=True, inplace=True)
+            combined.to_feather(os.path.join('data', 'oree_prices.feather'))
+            n_new = len(new_data)
+            date_range = f"{new_data['date'].min()} — {new_data['date'].max()}"
+            return jsonify({
+                'success': True,
+                'message': f'Завантажено {n_new} годин',
+                'date_range': date_range,
+                'total_hours': len(combined)
+            })
+        else:
+            cached_count = len(cached) if cached is not None else 0
+            return jsonify({
+                'success': True,
+                'message': f'Нових даних немає. У кеші {cached_count} годин.',
+                'total_hours': cached_count
+            })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/generation_mix')
 def api_generation_mix():
