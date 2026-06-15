@@ -14,6 +14,7 @@ QUANTILE_CONFIG_PATH = os.path.join(MODEL_DIR, 'quantile_config.json')
 QUANTILE_P10_PATH = os.path.join(MODEL_DIR, 'quantile_p10.pkl')
 QUANTILE_P50_PATH = os.path.join(MODEL_DIR, 'quantile_p50.pkl')
 QUANTILE_P90_PATH = os.path.join(MODEL_DIR, 'quantile_p90.pkl')
+ENSEMBLE_CONFIG_PATH = os.path.join(MODEL_DIR, 'ensemble_config.json')
 
 def train_quantile_models(data_df, force=False):
     """Train XGBoost quantile regression (P10, P50, P90) for midday solar dip hours."""
@@ -111,6 +112,90 @@ def train_quantile_models(data_df, force=False):
 
     return models
 
+
+def cross_validate_timeseries(data_df, n_splits=5):
+    """TimeSeriesSplit cross-validation for robust model evaluation."""
+    feature_cols = [
+        'hour', 'dayofweek', 'month', 'day',
+        'is_weekend', 'is_holiday',
+        'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
+        'sin_dayofyear', 'cos_dayofyear',
+        'sin_hour_of_week', 'cos_hour_of_week',
+        'temperature', 'temperature_squared',
+        'humidity', 'solar_radiation',
+        'solar_index', 'wind_index', 'renewable_index',
+        'nuclear_share', 'thermal_share', 'hydro_share',
+        'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
+        'days_since_epoch',
+        'solar_irradiance', 'solar_intensity',
+        'is_solar_dip_hour',
+        'demand_proxy', 'cooling_demand', 'heating_demand',
+        'price_lag_24h', 'price_lag_168h',
+        'price_rolling_mean_24h', 'price_rolling_std_24h',
+        'price_delta_1h', 'price_vs_yesterday',
+        'solar_x_hour', 'wind_x_hour',
+    ]
+
+    available = [c for c in feature_cols if c in data_df.columns]
+    df = data_df.dropna(subset=['price'] + available).copy()
+    if len(df) < 2000:
+        print(f"[CV] Not enough data: {len(df)} rows")
+        return None
+
+    X = df[available].values
+    y = df['price'].values
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    fold_metrics = []
+
+    for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+
+        model = xgb.XGBRegressor(
+            n_estimators=400,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=1.0,
+            reg_lambda=2.0,
+            min_child_weight=5,
+            random_state=42,
+            n_jobs=-1
+        )
+        model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+        preds = model.predict(X_test)
+
+        mae = mean_absolute_error(y_test, preds)
+        rmse = np.sqrt(mean_squared_error(y_test, preds))
+        r2 = r2_score(y_test, preds)
+
+        fold_metrics.append({
+            'fold': fold + 1,
+            'mae': round(float(mae), 2),
+            'rmse': round(float(rmse), 2),
+            'r2': round(float(r2), 4),
+            'n_train': len(train_idx),
+            'n_test': len(test_idx),
+        })
+        print(f"[CV] Fold {fold+1}/{n_splits}: MAE={mae:.2f}, R2={r2:.4f}")
+
+    avg_mae = np.mean([m['mae'] for m in fold_metrics])
+    avg_rmse = np.mean([m['rmse'] for m in fold_metrics])
+    avg_r2 = np.mean([m['r2'] for m in fold_metrics])
+
+    result = {
+        'folds': fold_metrics,
+        'avg_mae': round(float(avg_mae), 2),
+        'avg_rmse': round(float(avg_rmse), 2),
+        'avg_r2': round(float(avg_r2), 4),
+        'n_splits': n_splits,
+    }
+    print(f"[CV] Average: MAE={avg_mae:.2f}, RMSE={avg_rmse:.2f}, R2={avg_r2:.4f}")
+    return result
+
+
 def train_model(data_df, force=False):
     if os.path.exists(MODEL_PATH) and not force:
         try:
@@ -172,7 +257,60 @@ def train_model(data_df, force=False):
     mae_val = mean_absolute_error(y_test, preds)
     r2_val = r2_score(y_test, preds)
 
-    model = xgb_model
+    # Train LSTM
+    from model.lstm import train_lstm, load_lstm, predict_lstm, LSTM_FEATURE_COLS
+    lstm_config = train_lstm(data_df, force=force)
+    lstm_model, lstm_scaler, _ = load_lstm()
+
+    # Ensemble weights: find optimal on test set
+    w_xgb, w_lstm = 0.6, 0.4
+    if lstm_model is not None:
+        lstm_features = [c for c in LSTM_FEATURE_COLS if c in df.columns]
+        recent_for_lstm = df.iloc[split_idx - 48:split_idx + len(y_test)]
+        lstm_preds_all = []
+
+        for start in range(0, len(y_test), 24):
+            end = min(start + 24, len(y_test))
+            recent_slice = recent_for_lstm.iloc[start:start + 48] if start + 48 <= len(recent_for_lstm) else recent_for_lstm.iloc[-48:]
+            if len(recent_slice) >= 48:
+                lp = predict_lstm(lstm_model, lstm_scaler, recent_slice, lstm_features)
+                if lp is not None:
+                    lstm_preds_all.extend(lp[:end - start])
+                else:
+                    lstm_preds_all.extend(preds[start:end])
+            else:
+                lstm_preds_all.extend(preds[start:end])
+
+        if len(lstm_preds_all) == len(y_test):
+            best_mae = mae_val
+            best_w = (1.0, 0.0)
+            for w in np.arange(0.3, 0.9, 0.05):
+                ensemble_pred = w * preds + (1 - w) * np.array(lstm_preds_all)
+                ens_mae = mean_absolute_error(y_test, ensemble_pred)
+                if ens_mae < best_mae:
+                    best_mae = ens_mae
+                    best_w = (w, 1 - w)
+            w_xgb, w_lstm = best_w
+            ensemble_pred = w_xgb * preds + w_lstm * np.array(lstm_preds_all)
+            mae_val = mean_absolute_error(y_test, ensemble_pred)
+            r2_val = r2_score(y_test, ensemble_pred)
+            print(f"[ENSEMBLE] Optimal weights: XGB={w_xgb:.2f}, LSTM={w_lstm:.2f}, MAE={mae_val:.2f}")
+
+            import json
+            with open(ENSEMBLE_CONFIG_PATH, 'w') as f:
+                json.dump({
+                    'w_xgb': round(float(w_xgb), 3),
+                    'w_lstm': round(float(w_lstm), 3),
+                    'mae_ensemble': round(float(mae_val), 2),
+                    'mae_xgb_only': round(float(mean_absolute_error(y_test, preds)), 2),
+                    'lstm_mae': lstm_config.get('mae', None) if lstm_config else None,
+                }, f)
+
+    model = {
+        'xgb': xgb_model,
+        'weight_xgb': w_xgb,
+        'weight_lstm': w_lstm,
+    }
     metrics = {
         'mae': round(float(mae_val), 2),
         'rmse': round(float(np.sqrt(mean_squared_error(y_test, preds))), 2),
@@ -180,6 +318,8 @@ def train_model(data_df, force=False):
         'n_train': int(len(X_train)),
         'n_test': int(len(X_test)),
         'feature_cols': available,
+        'has_lstm': lstm_model is not None,
+        'ensemble_weights': {'xgb': w_xgb, 'lstm': w_lstm},
     }
 
     os.makedirs(MODEL_DIR, exist_ok=True)
@@ -245,9 +385,18 @@ def predict_hourly(model, features_df):
 
     if isinstance(model, dict) and 'xgb' in model:
         pred_xgb = model['xgb'].predict(X)
-        pred_hgb = model['hgb'].predict(X)
         w_xgb = model.get('weight_xgb', 0.6)
-        w_hgb = model.get('weight_hgb', 0.4)
-        return pred_xgb * w_xgb + pred_hgb * w_hgb
+        w_lstm = model.get('weight_lstm', 0.4)
+
+        if w_lstm > 0:
+            from model.lstm import load_lstm, predict_lstm, LSTM_FEATURE_COLS
+            lstm_model, lstm_scaler, _ = load_lstm()
+            if lstm_model is not None:
+                lstm_features = [c for c in LSTM_FEATURE_COLS if c in features_df.columns]
+                lstm_preds = predict_lstm(lstm_model, lstm_scaler, features_df, lstm_features)
+                if lstm_preds is not None and len(lstm_preds) >= len(pred_xgb):
+                    return w_xgb * pred_xgb + w_lstm * lstm_preds[:len(pred_xgb)]
+
+        return pred_xgb
 
     return model.predict(X)

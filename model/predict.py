@@ -295,11 +295,19 @@ def get_model_stats():
     metrics = load_metrics()
     if metrics is None:
         return {'status': 'not_trained'}
-    return {
+    result = {
         'status': 'trained',
         'mae': metrics.get('mae', 0),
         'rmse': metrics.get('rmse', 0),
         'r2': metrics.get('r2', 0),
         'n_train': metrics.get('n_train', 0),
-        'n_test': metrics.get('n_test', 0)
+        'n_test': metrics.get('n_test', 0),
+        'has_lstm': metrics.get('has_lstm', False),
+        'ensemble_weights': metrics.get('ensemble_weights', {}),
     }
+    ensemble_path = os.path.join(os.path.dirname(__file__), 'ensemble_config.json')
+    if os.path.exists(ensemble_path):
+        import json
+        with open(ensemble_path) as f:
+            result['ensemble'] = json.load(f)
+    return result
