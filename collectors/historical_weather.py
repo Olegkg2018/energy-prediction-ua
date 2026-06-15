@@ -12,6 +12,7 @@ HISTORICAL_CACHE = os.path.join(CACHE_DIR, 'historical_weather.feather')
 LAT, LON = 49.53, 30.40
 
 OPEN_METEO_URL = 'https://archive-api.open-meteo.com/v1/archive'
+OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast'
 
 
 def fetch_open_meteo(start_date, end_date, lat=LAT, lon=LON):
@@ -59,6 +60,59 @@ def fetch_open_meteo(start_date, end_date, lat=LAT, lon=LON):
     return None
 
 
+def fetch_forecast_weather(start_date, end_date, lat=LAT, lon=LON):
+    """Fetch hourly weather from Open-Meteo Forecast API (for recent dates not in archive)."""
+    start = pd.Timestamp(start_date)
+    end = pd.Timestamp(end_date)
+    today = pd.Timestamp.now().normalize()
+    past_days = max(1, (today - start).days + 1)
+    forecast_days = max(1, (end - today).days + 1)
+
+    params = {
+        'latitude': lat,
+        'longitude': lon,
+        'hourly': 'temperature_2m,relative_humidity_2m,cloud_cover,wind_speed_10m,shortwave_radiation',
+        'timezone': 'Europe/Kyiv',
+        'past_days': past_days,
+        'forecast_days': forecast_days,
+    }
+    try:
+        resp = requests.get(OPEN_METEO_FORECAST_URL, params=params, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            hourly = data.get('hourly', {})
+            if not hourly or 'time' not in hourly:
+                return None
+            times = hourly['time']
+            rows = []
+            for i, t in enumerate(times):
+                dt = pd.Timestamp(t)
+                if dt < start or dt > end + pd.Timedelta(hours=23):
+                    continue
+                temp = hourly.get('temperature_2m', [None] * len(times))[i]
+                humidity = hourly.get('relative_humidity_2m', [None] * len(times))[i]
+                clouds = hourly.get('cloud_cover', [None] * len(times))[i]
+                wind = hourly.get('wind_speed_10m', [None] * len(times))[i]
+                solar = hourly.get('shortwave_radiation', [None] * len(times))[i]
+                if temp is not None:
+                    rows.append({
+                        'datetime': dt,
+                        'date': dt.strftime('%Y-%m-%d'),
+                        'hour': dt.hour,
+                        'temperature': round(float(temp), 1),
+                        'humidity': int(round(float(humidity))) if humidity is not None else 50,
+                        'clouds': int(round(float(clouds))) if clouds is not None else 50,
+                        'wind_speed': round(float(wind), 1) if wind is not None else 3.0,
+                        'solar_radiation': round(float(solar), 1) if solar is not None else 0.0,
+                    })
+            return pd.DataFrame(rows) if rows else None
+        else:
+            print(f'[HIST-WEATHER] Forecast API HTTP {resp.status_code}')
+    except Exception as e:
+        print(f'[HIST-WEATHER] Forecast API error: {e}')
+    return None
+
+
 def fetch_historical_weather_in_chunks(start_date, end_date, chunk_days=90):
     """Fetch historical weather in chunks to avoid API limits."""
     start = pd.Timestamp(start_date)
@@ -96,12 +150,51 @@ def get_historical_weather(start_date, end_date, force=False):
                 mask = (cached['date'] >= start_date) & (cached['date'] <= end_date)
                 subset = cached[mask]
                 if len(subset) > 0:
+                    # Check for missing dates and fill with forecast API
+                    all_dates = set(pd.date_range(start_date, end_date).strftime('%Y-%m-%d'))
+                    cached_dates = set(subset['date'].unique())
+                    missing_dates = sorted(all_dates - cached_dates)
+                    if missing_dates:
+                        print(f'[HIST-WEATHER] Cache has gaps, fetching {len(missing_dates)} missing dates via Forecast API')
+                        forecast_df = fetch_forecast_weather(missing_dates[0], missing_dates[-1])
+                        if forecast_df is not None and len(forecast_df) > 0:
+                            forecast_df['date'] = pd.to_datetime(forecast_df['datetime']).dt.strftime('%Y-%m-%d')
+                            subset = pd.concat([subset, forecast_df]).drop_duplicates(subset='datetime').sort_values('datetime').reset_index(drop=True)
+                            # Update cache
+                            try:
+                                subset.to_feather(HISTORICAL_CACHE)
+                            except Exception:
+                                pass
                     return subset
         except Exception:
             pass
 
     print(f'[HIST-WEATHER] Fetching {start_date} to {end_date} from Open-Meteo...')
     df = fetch_historical_weather_in_chunks(start_date, end_date, chunk_days=90)
+
+    # Also try forecast API to fill recent gaps (archive has ~3 day delay)
+    all_dates = set(pd.date_range(start_date, end_date).strftime('%Y-%m-%d'))
+    if df is not None:
+        existing_dates = set(df['date'].unique())
+        missing_dates = sorted(all_dates - existing_dates)
+    else:
+        missing_dates = sorted(all_dates)
+
+    if missing_dates:
+        today = pd.Timestamp.now().normalize()
+        forecast_limit = today + pd.Timedelta(days=16)
+        forecast_missing = [d for d in missing_dates if pd.Timestamp(d) <= forecast_limit]
+        if forecast_missing:
+            print(f'[HIST-WEATHER] Fetching {len(forecast_missing)} recent dates from Forecast API')
+            for chunk_start in range(0, len(forecast_missing), 16):
+                chunk = forecast_missing[chunk_start:chunk_start + 16]
+                forecast_df = fetch_forecast_weather(chunk[0], chunk[-1])
+                if forecast_df is not None and len(forecast_df) > 0:
+                    forecast_df['date'] = pd.to_datetime(forecast_df['datetime']).dt.strftime('%Y-%m-%d')
+                    if df is not None:
+                        df = pd.concat([df, forecast_df]).drop_duplicates(subset='datetime').sort_values('datetime').reset_index(drop=True)
+                    else:
+                        df = forecast_df
 
     if df is not None and len(df) > 0:
         if os.path.exists(HISTORICAL_CACHE):
