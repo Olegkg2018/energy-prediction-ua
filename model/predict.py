@@ -7,49 +7,142 @@ from collectors.generation_mix import get_generation_mix
 
 _FEATURE_CACHE = None
 
+def _get_real_weather_for_target(target_date):
+    """Try to get real weather forecast for target date from OpenWeather API."""
+    try:
+        from collectors.weather import get_forecast
+        forecast = get_forecast()
+        if forecast is not None and len(forecast) > 0:
+            forecast['date'] = pd.to_datetime(forecast['date']).dt.strftime('%Y-%m-%d')
+            target_weather = forecast[forecast['date'] == target_date]
+            if len(target_weather) >= 20:
+                return target_weather.sort_values('hour').reset_index(drop=True)
+    except Exception:
+        pass
+    return None
+
+
+def _get_real_renewable_for_target(target_date):
+    """Try to get real renewable index forecast for target date."""
+    try:
+        from collectors.renewable_index import get_renewable_forecast
+        forecast = get_renewable_forecast(days=3)
+        if forecast is not None and len(forecast) > 0:
+            target_ren = [r for r in forecast if r.get('date') == target_date]
+            if len(target_ren) >= 20:
+                return pd.DataFrame(target_ren).sort_values('hour').reset_index(drop=True)
+    except Exception:
+        pass
+    return None
+
+
+def _compute_hour_specific_price_features(oree_lags, pred_date):
+    """Compute hour-specific price features from historical patterns (no look-ahead)."""
+    result = {}
+    if len(oree_lags) == 0:
+        for c in ['price_rolling_mean_24h', 'price_rolling_std_24h', 'price_delta_1h', 'price_vs_yesterday']:
+            result[c] = [0] * 24
+        return result
+
+    oree_sorted = oree_lags.sort_values('datetime').set_index('datetime')
+    price_series = oree_sorted['price']
+
+    for hour in range(24):
+        last_ts = oree_sorted.index[-1]
+        last_price = price_series.get(last_ts, 0)
+
+        same_hour_prices = []
+        for day_offset in range(1, 8):
+            check_date = pred_date - pd.Timedelta(days=day_offset)
+            ts = check_date + pd.Timedelta(hours=hour)
+            if ts in price_series.index:
+                same_hour_prices.append(price_series.get(ts, 0))
+
+        if same_hour_prices:
+            result.setdefault('price_rolling_mean_24h', []).append(np.mean(same_hour_prices))
+            deltas = [same_hour_prices[i] - same_hour_prices[i-1] for i in range(1, len(same_hour_prices))]
+            result.setdefault('price_delta_1h', []).append(np.mean(deltas) if deltas else 0)
+            yesterday_same_hour = price_series.get(last_ts - pd.Timedelta(hours=24), None)
+            if yesterday_same_hour is not None:
+                result.setdefault('price_vs_yesterday', []).append(last_price - yesterday_same_hour)
+            else:
+                result.setdefault('price_vs_yesterday', []).append(0)
+        else:
+            result.setdefault('price_rolling_mean_24h', []).append(
+                price_series.rolling(24, min_periods=1).mean().get(last_ts, 0) if len(price_series) > 0 else 0)
+            result.setdefault('price_delta_1h', []).append(
+                price_series.diff(1).fillna(0).get(last_ts, 0) if len(price_series) > 0 else 0)
+            result.setdefault('price_vs_yesterday', []).append(0)
+
+    rolling_all = price_series.rolling(24, min_periods=1).mean()
+    rolling_std_all = price_series.rolling(24, min_periods=1).std().fillna(0)
+    last_ts = oree_sorted.index[-1]
+    result['price_rolling_std_24h'] = [rolling_std_all.get(last_ts, 0)] * 24
+
+    return result
+
+
 def prepare_prediction_features(target_date):
-    """Generate features matching training data using the same synthetic generators."""
+    """Generate features using real weather/renewable data when available."""
     from data.loader import (generate_synthetic_weather_for_range,
                               generate_synthetic_renewable_for_range,
                               generate_synthetic_genmix_for_range,
                               build_features)
     global _FEATURE_CACHE
-    
+
     pred_date = pd.Timestamp(target_date)
-    
-    # Generate weather for the full range matching training seed state
-    # then select only the target date
-    np.random.seed(42)
-    full_start = '2025-12-01'
-    weather = generate_synthetic_weather_for_range(full_start, target_date)
-    weather = weather[pd.to_datetime(weather['date']) == pred_date].copy()
-    weather = weather.sort_values('hour').reset_index(drop=True)
-    df = weather.copy()
-    df['datetime'] = pd.to_datetime(df['datetime'])
-    
-    # Renewable indices (synthetic, same as training)
-    np.random.seed(42)
-    syn_renewable = generate_synthetic_renewable_for_range(2025, 2026)
-    syn_renewable = syn_renewable[pd.to_datetime(syn_renewable['date']) == pred_date]
+
+    # --- Weather: try real forecast first, fall back to synthetic ---
+    real_weather = _get_real_weather_for_target(target_date)
+    if real_weather is not None:
+        df = real_weather.copy()
+        if 'datetime' not in df.columns:
+            df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['hour'].astype(str) + ':00:00')
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        if 'solar_radiation' not in df.columns:
+            df['solar_radiation'] = 0.0
+    else:
+        np.random.seed(42)
+        full_start = '2025-12-01'
+        weather = generate_synthetic_weather_for_range(full_start, target_date)
+        weather = weather[pd.to_datetime(weather['date']) == pred_date].copy()
+        weather = weather.sort_values('hour').reset_index(drop=True)
+        df = weather.copy()
+        df['datetime'] = pd.to_datetime(df['datetime'])
+
+    # --- Renewable indices: try real forecast first, fall back to synthetic ---
+    real_ren = _get_real_renewable_for_target(target_date)
     ren_cols = ['solar_index', 'wind_index', 'renewable_index']
-    for c in ren_cols:
-        if c in df.columns:
-            del df[c]
-    df = pd.merge(df, syn_renewable[['datetime'] + ren_cols], on='datetime', how='left')
+    if real_ren is not None and len(real_ren) > 0:
+        for c in ren_cols:
+            if c in df.columns:
+                del df[c]
+        if 'datetime' not in real_ren.columns:
+            real_ren['datetime'] = pd.to_datetime(real_ren['date'] + ' ' + real_ren['hour'].astype(str) + ':00:00')
+        df = pd.merge(df, real_ren[['datetime'] + ren_cols], on='datetime', how='left')
+    else:
+        np.random.seed(42)
+        syn_renewable = generate_synthetic_renewable_for_range(2025, 2026)
+        syn_renewable = syn_renewable[pd.to_datetime(syn_renewable['date']) == pred_date]
+        for c in ren_cols:
+            if c in df.columns:
+                del df[c]
+        df = pd.merge(df, syn_renewable[['datetime'] + ren_cols], on='datetime', how='left')
+
     for c in ren_cols:
         if c not in df.columns:
             df[c] = 0
         df[c] = df[c].fillna(0)
 
-    # Generation mix (real ENTSO-E if recent, else synthetic matching training)
+    # --- Generation mix (real ENTSO-E if available, else synthetic) ---
     genmix_cols = ['nuclear_share', 'thermal_share', 'hydro_share',
                    'solar_share', 'wind_share', 'res_share', 'total_gen_mw']
     genmix = get_generation_mix(days=14)
     genmix_ok = False
     if genmix is not None and len(genmix) > 0:
-        genmix_dates = set(pd.to_datetime(genmix['datetime']).dt.strftime('%Y-%m-%d'))
-        if target_date in genmix_dates:
-            gm = genmix[pd.to_datetime(genmix['datetime']).dt.strftime('%Y-%m-%d') == target_date].copy()
+        genmix['date_str'] = pd.to_datetime(genmix['datetime']).dt.strftime('%Y-%m-%d')
+        if target_date in genmix['date_str'].values:
+            gm = genmix[genmix['date_str'] == target_date].copy()
             gm['datetime'] = pd.to_datetime(gm['date'].astype(str) + ' ' + gm['hour'].astype(int).astype(str) + ':00:00')
             for c in genmix_cols:
                 if c in df.columns:
@@ -71,7 +164,7 @@ def prepare_prediction_features(target_date):
             df[c] = 0
         df[c] = df[c].fillna(0)
 
-    # Build time features (hour, dayofweek, month, etc.)
+    # Build time features
     df = build_features(df)
     df['solar_irradiance'] = df['solar_share'] * df['solar_radiation']
     df['solar_intensity'] = df['solar_share'] * df['sin_hour'].clip(lower=0)
@@ -79,13 +172,15 @@ def prepare_prediction_features(target_date):
     df['solar_x_hour'] = df['solar_radiation'] * df['hour']
     df['wind_x_hour'] = df['wind_index'] * df['hour']
 
-    # Price lag features from real OREE data
+    # --- Price lag features (NO look-ahead: exclude target date) ---
     try:
         oree_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'oree_prices.feather')
         if os.path.exists(oree_path):
             oree_lags = pd.read_feather(oree_path)[['datetime', 'price']].copy()
             oree_lags['datetime'] = pd.to_datetime(oree_lags['datetime'])
             oree_lags = oree_lags.drop_duplicates(subset='datetime')
+            oree_lags = oree_lags[oree_lags['datetime'] < pred_date].copy()
+
             for lag_hours, col_name in [(24, 'price_lag_24h'), (168, 'price_lag_168h')]:
                 ref = oree_lags.copy()
                 ref['datetime'] = ref['datetime'] + pd.Timedelta(hours=lag_hours)
@@ -93,18 +188,10 @@ def prepare_prediction_features(target_date):
                 df = pd.merge(df, ref[['datetime', col_name]], on='datetime', how='left')
                 df[col_name] = df[col_name].fillna(0)
 
-            oree_sorted = oree_lags.sort_values('datetime').set_index('datetime')
-            df = df.set_index('datetime', drop=False)
-            price_series = oree_sorted['price']
-            rolling_24 = price_series.rolling(24, min_periods=1).mean()
-            rolling_std_24 = price_series.rolling(24, min_periods=1).std().fillna(0)
-            price_delta = price_series.diff(1).fillna(0)
-            price_yesterday = price_series.shift(24)
-            df['price_rolling_mean_24h'] = df.index.map(lambda x: rolling_24.get(x, 0))
-            df['price_rolling_std_24h'] = df.index.map(lambda x: rolling_std_24.get(x, 0))
-            df['price_delta_1h'] = df.index.map(lambda x: price_delta.get(x, 0))
-            df['price_vs_yesterday'] = df.index.map(lambda x: (price_series.get(x, 0) - price_yesterday.get(x, 0)) if x in price_yesterday.index and pd.notna(price_yesterday.get(x)) else 0)
-            df = df.reset_index(drop=True)
+            hour_features = _compute_hour_specific_price_features(oree_lags, pred_date)
+            df = df.sort_values('hour').reset_index(drop=True)
+            for col_name, values in hour_features.items():
+                df[col_name] = values
         else:
             df['price_lag_24h'] = 0
             df['price_lag_168h'] = 0
