@@ -202,12 +202,25 @@ def build_features(df):
     df['is_holiday'] = dt.dt.strftime('%Y-%m-%d').isin(ALL_HOLIDAYS).astype(int)
     df['sin_hour'] = np.sin(2 * np.pi * df['hour'] / 24)
     df['cos_hour'] = np.cos(2 * np.pi * df['hour'] / 24)
+    # 2nd harmonic (12h period)
+    df['sin_hour_2'] = np.sin(4 * np.pi * df['hour'] / 24)
+    df['cos_hour_2'] = np.cos(4 * np.pi * df['hour'] / 24)
+    # 3rd harmonic (8h period)
+    df['sin_hour_3'] = np.sin(6 * np.pi * df['hour'] / 24)
+    df['cos_hour_3'] = np.cos(6 * np.pi * df['hour'] / 24)
     df['sin_month'] = np.sin(2 * np.pi * df['month'] / 12)
     df['cos_month'] = np.cos(2 * np.pi * df['month'] / 12)
+    df['sin_month_2'] = np.sin(4 * np.pi * df['month'] / 12)
+    df['cos_month_2'] = np.cos(4 * np.pi * df['month'] / 12)
     df['sin_dayofyear'] = np.sin(2 * np.pi * dt.dt.dayofyear / 365)
     df['cos_dayofyear'] = np.cos(2 * np.pi * dt.dt.dayofyear / 365)
+    df['sin_dayofyear_2'] = np.sin(4 * np.pi * dt.dt.dayofyear / 365)
+    df['cos_dayofyear_2'] = np.cos(4 * np.pi * dt.dt.dayofyear / 365)
     df['sin_hour_of_week'] = np.sin(2 * np.pi * (df['dayofweek'] * 24 + df['hour']) / 168)
     df['cos_hour_of_week'] = np.cos(2 * np.pi * (df['dayofweek'] * 24 + df['hour']) / 168)
+    df['sin_week_of_year'] = np.sin(2 * np.pi * df.get('week_of_year', dt.dt.isocalendar().week.astype(int)) / 52)
+    df['cos_week_of_year'] = np.cos(2 * np.pi * df.get('week_of_year', dt.dt.isocalendar().week.astype(int)) / 52)
+    df['quarter'] = dt.dt.quarter
 
     df['is_month_start'] = dt.dt.is_month_start.astype(int)
     df['is_month_end'] = dt.dt.is_month_end.astype(int)
@@ -216,10 +229,38 @@ def build_features(df):
     df['day_of_month'] = dt.dt.day
     df['week_of_year'] = dt.dt.isocalendar().week.astype(int)
     df['is_week_before_holiday'] = 0
+    df['days_to_next_holiday'] = 365
+    df['days_since_last_holiday'] = 365
+    df['is_bridge_day'] = 0
+    df['day_after_holiday'] = 0
+    df['day_before_holiday'] = 0
     for h in ALL_HOLIDAYS:
         hdate = pd.Timestamp(h)
-        mask = (dt >= hdate - pd.Timedelta(days=7)) & (dt < hdate)
-        df.loc[mask, 'is_week_before_holiday'] = 1
+        mask_week_before = (dt >= hdate - pd.Timedelta(days=7)) & (dt < hdate)
+        df.loc[mask_week_before, 'is_week_before_holiday'] = 1
+        # Days to next holiday
+        future_mask = (dt < hdate) & (df['days_to_next_holiday'] > (hdate - dt).dt.days)
+        diff = (hdate - dt[future_mask]).dt.days
+        df.loc[future_mask, 'days_to_next_holiday'] = diff.values
+        # Days since last holiday
+        past_mask = (dt > hdate) & (df['days_since_last_holiday'] > (dt - hdate).dt.days)
+        diff_past = (dt[past_mask] - hdate).dt.days
+        df.loc[past_mask, 'days_since_last_holiday'] = diff_past.values
+        # Day before/after holiday
+        mask_before = (dt >= hdate - pd.Timedelta(days=1)) & (dt < hdate)
+        mask_after = (dt > hdate) & (dt <= hdate + pd.Timedelta(days=1))
+        df.loc[mask_before, 'day_before_holiday'] = 1
+        df.loc[mask_after, 'day_after_holiday'] = 1
+        # Bridge day: weekday between holiday and weekend
+        h_weekday = hdate.dayofweek
+        if h_weekday == 0:  # Monday holiday → Friday bridge
+            bridge_mask = (dt >= hdate - pd.Timedelta(days=3)) & (dt <= hdate - pd.Timedelta(days=1)) & (df['dayofweek'] == 4)
+            df.loc[bridge_mask, 'is_bridge_day'] = 1
+        elif h_weekday == 4:  # Friday holiday → Monday bridge
+            bridge_mask = (dt >= hdate + pd.Timedelta(days=1)) & (dt <= hdate + pd.Timedelta(days=3)) & (df['dayofweek'] == 0)
+            df.loc[bridge_mask, 'is_bridge_day'] = 1
+    df['days_to_next_holiday'] = df['days_to_next_holiday'].clip(upper=365)
+    df['days_since_last_holiday'] = df['days_since_last_holiday'].clip(upper=365)
 
     df['season'] = df['month'].map({12: 0, 1: 0, 2: 0, 3: 1, 4: 1, 5: 1,
                                      6: 2, 7: 2, 8: 2, 9: 3, 10: 3, 11: 3})
@@ -243,16 +284,46 @@ def build_features(df):
         df['solar_radiation'] = 0
     if 'humidity' not in df.columns:
         df['humidity'] = 50
+    if 'wind_speed' not in df.columns:
+        df['wind_speed'] = 3.0
+    if 'clouds' not in df.columns:
+        df['clouds'] = 50
     if 'is_solar_dip_hour' not in df.columns:
         df['is_solar_dip_hour'] = ((df['hour'] >= 10) & (df['hour'] <= 15)).astype(int)
     df['solar_x_hour'] = df.get('solar_radiation', pd.Series(0, index=df.index)) * df['hour']
     df['wind_x_hour'] = df.get('wind_index', pd.Series(0, index=df.index)) * df['hour']
+
+    # Heating/cooling degree hours
+    if 'temperature' in df.columns:
+        df['heating_degree_hour'] = np.maximum(18 - df['temperature'], 0)
+        df['cooling_degree_hour'] = np.maximum(df['temperature'] - 24, 0)
+        df['temp_x_hour'] = df['temperature'] * df['hour']
+        df['temp_x_solar'] = df['temperature'] * df['solar_radiation']
+        df['temp_anomaly'] = df['temperature'] - df['temperature'].rolling(168, min_periods=1).mean()
+    else:
+        df['heating_degree_hour'] = 0
+        df['cooling_degree_hour'] = 0
+        df['temp_x_hour'] = 0
+        df['temp_x_solar'] = 0
+        df['temp_anomaly'] = 0
+    df['cloud_cover'] = df['clouds']
+    df['solar_x_clouds'] = df['solar_radiation'] * (1 - df['clouds'] / 100)
+    df['wind_x_renewable'] = df['wind_speed'] * df.get('renewable_index', 0)
     for col in ['solar_index', 'wind_index', 'renewable_index',
                 'nuclear_share', 'thermal_share', 'hydro_share',
                 'solar_share', 'wind_share', 'res_share',
                 'total_gen_mw']:
         if col not in df.columns:
             df[col] = 0
+
+    # Generation interaction features
+    df['renewable_share_forecast'] = (df['solar_share'] + df['wind_share'])
+    df['thermal_x_hour'] = df['thermal_share'] * df['hour']
+    df['nuclear_x_hour'] = df['nuclear_share'] * df['hour']
+    df['hydro_x_hour'] = df['hydro_share'] * df['hour']
+    df['res_x_temp'] = df['res_share'] * df.get('temperature', 0)
+    df['total_gen_x_hour'] = df['total_gen_mw'] * df['hour']
+
     return df
 
 def get_combined_dataset(use_csv=False):
@@ -392,24 +463,108 @@ def get_combined_dataset(use_csv=False):
     merged.sort_values('datetime', inplace=True)
     merged.reset_index(drop=True, inplace=True)
     
-    # Price lag features using actual datetime differences
+    # === EXTENDED PRICE LAG FEATURES ===
     ref = merged[['datetime', 'price']].copy()
-    for lag_hours, col_name in [(24, 'price_lag_24h'), (168, 'price_lag_168h')]:
+    price_mean = merged['price'].mean()
+    for lag_hours, col_name in [
+        (2, 'price_lag_2h'), (3, 'price_lag_3h'), (6, 'price_lag_6h'),
+        (12, 'price_lag_12h'), (24, 'price_lag_24h'), (48, 'price_lag_48h'),
+        (168, 'price_lag_168h'), (336, 'price_lag_336h'), (504, 'price_lag_504h'),
+    ]:
         ref_lag = ref.copy()
         ref_lag['datetime'] = ref_lag['datetime'] + pd.Timedelta(hours=lag_hours)
         ref_lag.rename(columns={'price': col_name}, inplace=True)
         merged = pd.merge(merged, ref_lag[['datetime', col_name]], on='datetime', how='left')
-        merged[col_name] = merged[col_name].fillna(merged['price'].mean())
+        merged[col_name] = merged[col_name].fillna(price_mean)
 
-    merged['price_rolling_mean_24h'] = merged['price'].rolling(24, min_periods=1).mean()
-    merged['price_rolling_std_24h'] = merged['price'].rolling(24, min_periods=1).std().fillna(0)
+    # === ROLLING STATISTICS (not shifted — consistent with predict.py computation) ===
+    price_for_rolling = merged['price']
+    for window in [24, 48, 168]:
+        rolled = price_for_rolling.rolling(window, min_periods=1)
+        merged[f'price_rolling_mean_{window}h'] = rolled.mean()
+        merged[f'price_rolling_std_{window}h'] = rolled.std().fillna(0)
+        merged[f'price_rolling_min_{window}h'] = rolled.min()
+        merged[f'price_rolling_max_{window}h'] = rolled.max()
+    merged['price_rolling_median_24h'] = price_for_rolling.rolling(24, min_periods=1).median()
+    merged['price_rolling_skew_168h'] = price_for_rolling.rolling(168, min_periods=24).skew().fillna(0)
+    merged['price_rolling_kurt_168h'] = price_for_rolling.rolling(168, min_periods=24).kurt().fillna(0)
+    merged['price_range_48h'] = merged['price_rolling_max_48h'] - merged['price_rolling_min_48h']
+    merged['price_range_168h'] = merged['price_rolling_max_168h'] - merged['price_rolling_min_168h']
+
+    # EWM
+    merged['price_ewm_12h'] = price_for_rolling.ewm(span=12, adjust=False).mean()
+    merged['price_ewm_48h'] = price_for_rolling.ewm(span=48, adjust=False).mean()
+
+    # Price deltas (use lag-to-lag differences to exclude current price)
     merged['price_delta_1h'] = merged['price'].diff(1).fillna(0)
+    merged['price_delta_3h'] = merged['price'].diff(3).fillna(0)
+    merged['price_delta_6h'] = merged['price'].diff(6).fillna(0)
+    merged['price_delta_24h'] = merged['price'].diff(24).fillna(0)
+
+    # Price comparisons (shifted: use yesterday's delta, not today's)
     ref_yesterday = ref.copy()
     ref_yesterday['datetime'] = ref_yesterday['datetime'] + pd.Timedelta(hours=24)
-    ref_yesterday.rename(columns={'price': 'price_vs_yesterday'}, inplace=True)
-    merged = pd.merge(merged, ref_yesterday[['datetime', 'price_vs_yesterday']], on='datetime', how='left')
-    merged['price_vs_yesterday'] = merged['price_vs_yesterday'].fillna(merged['price'])
-    merged['price_vs_yesterday'] = merged['price'] - merged['price_vs_yesterday']
+    ref_yesterday.rename(columns={'price': 'price_yesterday'}, inplace=True)
+    merged = pd.merge(merged, ref_yesterday[['datetime', 'price_yesterday']], on='datetime', how='left')
+    merged['price_yesterday'] = merged['price_yesterday'].fillna(price_mean)
+    ref_yesterday_48 = ref.copy()
+    ref_yesterday_48['datetime'] = ref_yesterday_48['datetime'] + pd.Timedelta(hours=48)
+    ref_yesterday_48.rename(columns={'price': 'price_48h_ago'}, inplace=True)
+    merged = pd.merge(merged, ref_yesterday_48[['datetime', 'price_48h_ago']], on='datetime', how='left')
+    merged['price_48h_ago'] = merged['price_48h_ago'].fillna(price_mean)
+    merged['price_vs_yesterday'] = merged['price_yesterday'] - merged['price_48h_ago']
+
+    ref_last_week = ref.copy()
+    ref_last_week['datetime'] = ref_last_week['datetime'] + pd.Timedelta(hours=168)
+    ref_last_week.rename(columns={'price': 'price_last_week'}, inplace=True)
+    merged = pd.merge(merged, ref_last_week[['datetime', 'price_last_week']], on='datetime', how='left')
+    merged['price_last_week'] = merged['price_last_week'].fillna(price_mean)
+    ref_last_week_336 = ref.copy()
+    ref_last_week_336['datetime'] = ref_last_week_336['datetime'] + pd.Timedelta(hours=336)
+    ref_last_week_336.rename(columns={'price': 'price_336h_ago'}, inplace=True)
+    merged = pd.merge(merged, ref_last_week_336[['datetime', 'price_336h_ago']], on='datetime', how='left')
+    merged['price_336h_ago'] = merged['price_336h_ago'].fillna(price_mean)
+    merged['price_vs_last_week'] = merged['price_last_week'] - merged['price_336h_ago']
+
+    # Same-hour yesterday (lag only, no current price)
+    ref_same_hour = ref.copy()
+    ref_same_hour['datetime'] = ref_same_hour['datetime'] + pd.Timedelta(hours=24)
+    ref_same_hour.rename(columns={'price': 'price_same_hour_yesterday'}, inplace=True)
+    merged = pd.merge(merged, ref_same_hour[['datetime', 'price_same_hour_yesterday']], on='datetime', how='left')
+    merged['price_same_hour_yesterday'] = merged['price_same_hour_yesterday'].fillna(price_mean)
+    merged['price_yoy_ratio'] = merged['price_same_hour_yesterday'] / merged['price_48h_ago'].clip(lower=1)
+
+    # === TECHNICAL INDICATORS (consistent with predict.py) ===
+    # EMA
+    merged['price_ema_6'] = merged['price'].ewm(span=6, adjust=False).mean()
+    merged['price_ema_12'] = merged['price'].ewm(span=12, adjust=False).mean()
+    merged['price_ema_24'] = merged['price'].ewm(span=24, adjust=False).mean()
+    merged['price_ema_diff'] = merged['price_ema_6'] - merged['price_ema_24']
+    # Triple EMA
+    merged['price_tema'] = 3 * merged['price_ema_6'] - 3 * merged['price_ema_12'] + merged['price'].ewm(span=6, adjust=False).mean()
+
+    # Bollinger Bands
+    for bb_window in [24, 48]:
+        bb_ma = merged['price'].rolling(bb_window, min_periods=1).mean()
+        bb_std = merged['price'].rolling(bb_window, min_periods=1).std().fillna(0)
+        merged[f'price_bb_upper_{bb_window}'] = bb_ma + 2 * bb_std
+        merged[f'price_bb_lower_{bb_window}'] = bb_ma - 2 * bb_std
+        bb_range = (merged[f'price_bb_upper_{bb_window}'] - merged[f'price_bb_lower_{bb_window}']).clip(lower=1)
+        merged[f'price_bb_pctb_{bb_window}'] = (merged['price'] - merged[f'price_bb_lower_{bb_window}']) / bb_range
+
+    # Momentum, ROC (shifted: use lag-1 vs lag-24/48)
+    merged['price_momentum_24'] = merged['price_lag_24h'] - merged['price_lag_48h']
+    merged['price_momentum_48'] = merged['price_lag_48h'] - merged['price_lag_168h']
+    merged['price_roc_12'] = (merged['price_lag_12h'] / merged['price_lag_24h'].clip(lower=1) - 1).fillna(0)
+    merged['price_roc_24'] = (merged['price_lag_24h'] / merged['price_lag_48h'].clip(lower=1) - 1).fillna(0)
+
+    # === GAS PRICE FEATURES ===
+    if 'gas_uah_mwh' in merged.columns:
+        merged['gas_momentum_7d'] = merged['gas_uah_mwh'].diff(7).fillna(0)
+        merged['gas_rolling_std_7d'] = merged['gas_uah_mwh'].rolling(7, min_periods=1).std().fillna(0)
+        if 'ttf_eur_mwh' in merged.columns:
+            merged['spark_spread'] = merged['price_lag_24h'] - merged['ttf_eur_mwh'] * 0.4
+            merged['spark_spread_lag7'] = merged['spark_spread'].shift(7).fillna(merged['spark_spread'].mean())
 
     try:
         os.makedirs(DATA_DIR, exist_ok=True)

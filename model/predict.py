@@ -37,47 +37,109 @@ def _get_real_renewable_for_target(target_date):
 
 
 def _compute_hour_specific_price_features(oree_lags, pred_date):
-    """Compute hour-specific price features from historical patterns (no look-ahead)."""
+    """Compute all price features from historical patterns (no look-ahead, no current price)."""
     result = {}
+    default_cols = [
+        'price_rolling_mean_24h', 'price_rolling_std_24h',
+        'price_rolling_min_24h', 'price_rolling_max_24h',
+        'price_rolling_median_24h',
+        'price_rolling_mean_48h', 'price_rolling_std_48h',
+        'price_rolling_min_48h', 'price_rolling_max_48h',
+        'price_rolling_mean_168h', 'price_rolling_std_168h',
+        'price_rolling_min_168h', 'price_rolling_max_168h',
+        'price_rolling_skew_168h', 'price_rolling_kurt_168h',
+        'price_range_48h', 'price_range_168h',
+        'price_ewm_12h', 'price_ewm_48h',
+        'price_delta_1h', 'price_delta_3h', 'price_delta_6h', 'price_delta_24h',
+        'price_vs_yesterday', 'price_vs_last_week',
+        'price_same_hour_yesterday', 'price_yoy_ratio',
+        'price_ema_6', 'price_ema_12', 'price_ema_24', 'price_ema_diff', 'price_tema',
+        'price_bb_pctb_24', 'price_bb_pctb_48',
+        'price_momentum_24', 'price_momentum_48',
+        'price_roc_12', 'price_roc_24',
+    ]
+    for c in default_cols:
+        result[c] = [0] * 24
+
     if len(oree_lags) == 0:
-        for c in ['price_rolling_mean_24h', 'price_rolling_std_24h', 'price_delta_1h', 'price_vs_yesterday']:
-            result[c] = [0] * 24
         return result
 
     oree_sorted = oree_lags.sort_values('datetime').set_index('datetime')
     price_series = oree_sorted['price']
+    all_prices = price_series.values
+    n = len(all_prices)
+    price_mean = price_series.mean()
 
-    for hour in range(24):
-        last_ts = oree_sorted.index[-1]
-        last_price = price_series.get(last_ts, 0)
+    # All available prices before pred_date
+    all_prices = price_series.values
+    n = len(all_prices)
 
-        same_hour_prices = []
-        for day_offset in range(1, 8):
-            check_date = pred_date - pd.Timedelta(days=day_offset)
-            ts = check_date + pd.Timedelta(hours=hour)
-            if ts in price_series.index:
-                same_hour_prices.append(price_series.get(ts, 0))
+    # Rolling stats at last known point
+    for window, prefix in [(24, '24h'), (48, '48h'), (168, '168h')]:
+        if n >= 1:
+            tail = all_prices[-min(window, n):]
+            result[f'price_rolling_mean_{prefix}'] = [float(np.mean(tail))] * 24
+            result[f'price_rolling_std_{prefix}'] = [float(np.std(tail, ddof=1)) if len(tail) > 1 else 0] * 24
+            result[f'price_rolling_min_{prefix}'] = [float(np.min(tail))] * 24
+            result[f'price_rolling_max_{prefix}'] = [float(np.max(tail))] * 24
+    if n > 0:
+        result['price_rolling_median_24h'] = [float(np.median(all_prices[-24:]))] * 24
+    if n >= 24:
+        tail168 = all_prices[-min(168, n):]
+        if len(tail168) > 10:
+            result['price_rolling_skew_168h'] = [float(pd.Series(tail168).skew())] * 24
+            result['price_rolling_kurt_168h'] = [float(pd.Series(tail168).kurtosis())] * 24
+    result['price_range_48h'] = [result['price_rolling_max_48h'][0] - result['price_rolling_min_48h'][0]] * 24
+    result['price_range_168h'] = [result['price_rolling_max_168h'][0] - result['price_rolling_min_168h'][0]] * 24
 
-        if same_hour_prices:
-            result.setdefault('price_rolling_mean_24h', []).append(np.mean(same_hour_prices))
-            deltas = [same_hour_prices[i] - same_hour_prices[i-1] for i in range(1, len(same_hour_prices))]
-            result.setdefault('price_delta_1h', []).append(np.mean(deltas) if deltas else 0)
-            yesterday_same_hour = price_series.get(last_ts - pd.Timedelta(hours=24), None)
-            if yesterday_same_hour is not None:
-                result.setdefault('price_vs_yesterday', []).append(last_price - yesterday_same_hour)
-            else:
-                result.setdefault('price_vs_yesterday', []).append(0)
-        else:
-            result.setdefault('price_rolling_mean_24h', []).append(
-                price_series.rolling(24, min_periods=1).mean().get(last_ts, 0) if len(price_series) > 0 else 0)
-            result.setdefault('price_delta_1h', []).append(
-                price_series.diff(1).fillna(0).get(last_ts, 0) if len(price_series) > 0 else 0)
-            result.setdefault('price_vs_yesterday', []).append(0)
+    # EWM
+    ewm = pd.Series(all_prices).ewm(span=12, adjust=False).mean()
+    result['price_ewm_12h'] = [float(ewm.iloc[-1])] * 24
+    ewm48 = pd.Series(all_prices).ewm(span=48, adjust=False).mean()
+    result['price_ewm_48h'] = [float(ewm48.iloc[-1])] * 24
 
-    rolling_all = price_series.rolling(24, min_periods=1).mean()
-    rolling_std_all = price_series.rolling(24, min_periods=1).std().fillna(0)
-    last_ts = oree_sorted.index[-1]
-    result['price_rolling_std_24h'] = [rolling_std_all.get(last_ts, 0)] * 24
+    # Deltas — use lagged deltas (price[t-1] - price[t-2] etc)
+    if n >= 2:
+        result['price_delta_1h'] = [float(all_prices[-2] - all_prices[-3]) if n >= 3 else 0] * 24
+    if n >= 4:
+        result['price_delta_3h'] = [float(all_prices[-4] - all_prices[-7]) if n >= 7 else 0] * 24
+    if n >= 7:
+        result['price_delta_6h'] = [float(all_prices[-7] - all_prices[-13]) if n >= 13 else 0] * 24
+    if n >= 25:
+        result['price_delta_24h'] = [float(all_prices[-25] - all_prices[-49]) if n >= 49 else 0] * 24
+
+    # Yesterday delta vs 48h ago
+    if n > 48:
+        result['price_vs_yesterday'] = [float(all_prices[-25] - all_prices[-49])] * 24
+        result['price_momentum_24'] = [float(all_prices[-25] - all_prices[-49])] * 24
+    if n > 168:
+        result['price_vs_last_week'] = [float(all_prices[-169] - all_prices[-337]) if n > 337 else 0] * 24
+        result['price_momentum_48'] = [float(all_prices[-49] - all_prices[-169]) if n > 169 else 0] * 24
+
+    # Same hour yesterday (lag only)
+    result['price_same_hour_yesterday'] = [float(all_prices[-25]) if n > 24 else price_mean] * 24
+    result['price_yoy_ratio'] = [float(all_prices[-25] / max(all_prices[-49], 1)) if n > 49 else 1.0] * 24
+
+    # ROC (lagged)
+    result['price_roc_12'] = [float((all_prices[-13] / max(all_prices[-25], 1)) - 1) if n > 25 else 0] * 24
+    result['price_roc_24'] = [float((all_prices[-25] / max(all_prices[-49], 1)) - 1) if n > 49 else 0] * 24
+
+    # EMA & TEMA
+    for span, col in [(6, 'price_ema_6'), (12, 'price_ema_12'), (24, 'price_ema_24')]:
+        ema_val = pd.Series(all_prices).ewm(span=span, adjust=False).mean().iloc[-1]
+        result[col] = [float(ema_val)] * 24
+    result['price_ema_diff'] = [result['price_ema_6'][0] - result['price_ema_24'][0]] * 24
+    result['price_tema'] = [3 * result['price_ema_6'][0] - 3 * result['price_ema_12'][0] + result['price_ema_6'][0]] * 24
+
+    # Bollinger Bands
+    for bb_window, suffix in [(24, '24'), (48, '48')]:
+        tail_bb = all_prices[-min(bb_window, n):]
+        bb_ma = np.mean(tail_bb)
+        bb_std = np.std(tail_bb, ddof=1) if len(tail_bb) > 1 else 0
+        bb_upper = bb_ma + 2 * bb_std
+        bb_lower = bb_ma - 2 * bb_std
+        bb_range = max(bb_upper - bb_lower, 1)
+        result[f'price_bb_pctb_{suffix}'] = [float((all_prices[-1] - bb_lower) / bb_range)] * 24
 
     return result
 
@@ -202,17 +264,23 @@ def prepare_prediction_features(target_date):
                     on='datetime', how='inner'
                 )
                 spread['vrd_rdn_spread'] = spread['vdr'] - spread['dam']
-                last_spread = spread[spread['datetime'] < pred_date]['vrd_rdn_spread']
+                spread['vrd_rdn_ratio'] = spread['vdr'] / spread['dam'].clip(lower=1)
+                last_spread = spread[spread['datetime'] < pred_date]
                 if len(last_spread) > 0:
-                    df['vrd_rdn_spread'] = float(last_spread.mean())
+                    df['vrd_rdn_spread'] = float(last_spread['vrd_rdn_spread'].mean())
+                    df['vrd_rdn_ratio'] = float(last_spread['vrd_rdn_ratio'].mean())
                 else:
                     df['vrd_rdn_spread'] = 0
+                    df['vrd_rdn_ratio'] = 1.0
             else:
                 df['vrd_rdn_spread'] = 0
+                df['vrd_rdn_ratio'] = 1.0
         else:
             df['vrd_rdn_spread'] = 0
+            df['vrd_rdn_ratio'] = 1.0
     except Exception:
         df['vrd_rdn_spread'] = 0
+        df['vrd_rdn_ratio'] = 1.0
 
     # --- Price lag features (NO look-ahead: exclude target date) ---
     try:
@@ -223,33 +291,43 @@ def prepare_prediction_features(target_date):
             oree_lags = oree_lags.drop_duplicates(subset='datetime')
             oree_lags = oree_lags[oree_lags['datetime'] < pred_date].copy()
 
-            for lag_hours, col_name in [(24, 'price_lag_24h'), (168, 'price_lag_168h')]:
+            price_mean = oree_lags['price'].mean() if len(oree_lags) > 0 else 0
+
+            # Extended price lags
+            for lag_hours, col_name in [
+                (2, 'price_lag_2h'), (3, 'price_lag_3h'), (6, 'price_lag_6h'),
+                (12, 'price_lag_12h'), (24, 'price_lag_24h'), (48, 'price_lag_48h'),
+                (168, 'price_lag_168h'), (336, 'price_lag_336h'), (504, 'price_lag_504h'),
+            ]:
                 ref = oree_lags.copy()
                 ref['datetime'] = ref['datetime'] + pd.Timedelta(hours=lag_hours)
                 ref.rename(columns={'price': col_name}, inplace=True)
                 df = pd.merge(df, ref[['datetime', col_name]], on='datetime', how='left')
-                df[col_name] = df[col_name].fillna(0)
+                df[col_name] = df[col_name].fillna(price_mean)
 
+            # Hour-specific rolling/technical features
             hour_features = _compute_hour_specific_price_features(oree_lags, pred_date)
             df = df.sort_values('hour').reset_index(drop=True)
             for col_name, values in hour_features.items():
                 df[col_name] = values
+
+            # Gas momentum features
+            if 'gas_uah_mwh' in df.columns:
+                df['gas_momentum_7d'] = 0
+                df['gas_rolling_std_7d'] = 0
+            if 'ttf_eur_mwh' in df.columns:
+                df['spark_spread'] = df.get('price_lag_24h', 0) - df['ttf_eur_mwh'] * 0.4
+                df['spark_spread_lag7'] = df.get('spark_spread', 0)
         else:
-            df['price_lag_24h'] = 0
-            df['price_lag_168h'] = 0
-            df['price_rolling_mean_24h'] = 0
-            df['price_rolling_std_24h'] = 0
-            df['price_delta_1h'] = 0
-            df['price_vs_yesterday'] = 0
+            for c in ['price_lag_2h', 'price_lag_3h', 'price_lag_6h', 'price_lag_12h',
+                       'price_lag_24h', 'price_lag_48h', 'price_lag_168h', 'price_lag_336h', 'price_lag_504h']:
+                df[c] = 0
     except Exception as e:
         import traceback
         traceback.print_exc()
-        df['price_lag_24h'] = 0
-        df['price_lag_168h'] = 0
-        df['price_rolling_mean_24h'] = 0
-        df['price_rolling_std_24h'] = 0
-        df['price_delta_1h'] = 0
-        df['price_vs_yesterday'] = 0
+        for c in ['price_lag_24h', 'price_lag_168h', 'price_rolling_mean_24h', 'price_rolling_std_24h',
+                   'price_delta_1h', 'price_vs_yesterday']:
+            df[c] = 0
 
     return df
 

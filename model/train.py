@@ -16,6 +16,79 @@ QUANTILE_P50_PATH = os.path.join(MODEL_DIR, 'quantile_p50.pkl')
 QUANTILE_P90_PATH = os.path.join(MODEL_DIR, 'quantile_p90.pkl')
 ENSEMBLE_CONFIG_PATH = os.path.join(MODEL_DIR, 'ensemble_config.json')
 
+FEATURE_COLS = [
+    # Time encodings (14)
+    'hour', 'dayofweek', 'month', 'day',
+    'is_weekend', 'is_holiday',
+    'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
+    'sin_dayofyear', 'cos_dayofyear',
+    'sin_hour_of_week', 'cos_hour_of_week',
+    # Fourier harmonics (10)
+    'sin_hour_2', 'cos_hour_2', 'sin_hour_3', 'cos_hour_3',
+    'sin_month_2', 'cos_month_2',
+    'sin_dayofyear_2', 'cos_dayofyear_2',
+    'sin_week_of_year', 'cos_week_of_year',
+    # Calendar enhancements (12)
+    'is_month_start', 'is_month_end', 'is_quarter_start', 'is_quarter_end',
+    'day_of_month', 'week_of_year', 'quarter', 'season',
+    'is_heating_season', 'is_cooling_season',
+    'is_week_before_holiday', 'is_bridge_day',
+    'day_before_holiday', 'day_after_holiday',
+    'days_to_next_holiday', 'days_since_last_holiday',
+    # Weather (10)
+    'temperature', 'temperature_squared',
+    'humidity', 'solar_radiation', 'wind_speed', 'clouds',
+    'heating_degree_hour', 'cooling_degree_hour',
+    'temp_anomaly', 'cloud_cover',
+    # Weather interactions (6)
+    'demand_proxy', 'cooling_demand', 'heating_demand',
+    'temp_x_hour', 'temp_x_solar', 'solar_x_clouds',
+    # Renewable & generation (14)
+    'solar_index', 'wind_index', 'renewable_index',
+    'nuclear_share', 'thermal_share', 'hydro_share',
+    'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
+    'renewable_share_forecast', 'thermal_x_hour',
+    'nuclear_x_hour', 'hydro_x_hour',
+    # Solar/wind interactions (5)
+    'solar_irradiance', 'solar_intensity', 'is_solar_dip_hour',
+    'solar_x_hour', 'wind_x_hour',
+    # Generation interactions (3)
+    'res_x_temp', 'total_gen_x_hour', 'wind_x_renewable',
+    # Trend (1)
+    'days_since_epoch',
+    # Extended price lags (9)
+    'price_lag_2h', 'price_lag_3h', 'price_lag_6h',
+    'price_lag_12h', 'price_lag_24h', 'price_lag_48h',
+    'price_lag_168h', 'price_lag_336h', 'price_lag_504h',
+    # Rolling statistics (17)
+    'price_rolling_mean_24h', 'price_rolling_std_24h',
+    'price_rolling_min_24h', 'price_rolling_max_24h',
+    'price_rolling_mean_48h', 'price_rolling_std_48h',
+    'price_rolling_min_48h', 'price_rolling_max_48h',
+    'price_rolling_mean_168h', 'price_rolling_std_168h',
+    'price_rolling_min_168h', 'price_rolling_max_168h',
+    'price_rolling_median_24h',
+    'price_rolling_skew_168h', 'price_rolling_kurt_168h',
+    'price_range_48h', 'price_range_168h',
+    # EWM (2)
+    'price_ewm_12h', 'price_ewm_48h',
+    # Price deltas (8)
+    'price_delta_1h', 'price_delta_3h', 'price_delta_6h', 'price_delta_24h',
+    'price_vs_yesterday', 'price_vs_last_week',
+    'price_same_hour_yesterday', 'price_yoy_ratio',
+    # Technical indicators (11)
+    'price_ema_6', 'price_ema_12', 'price_ema_24', 'price_ema_diff', 'price_tema',
+    'price_bb_pctb_24', 'price_bb_pctb_48',
+    'price_momentum_24', 'price_momentum_48',
+    'price_roc_12', 'price_roc_24',
+    # Gas & fuel (6)
+    'ttf_eur_mwh', 'gas_uah_mwh',
+    'gas_momentum_7d', 'gas_rolling_std_7d',
+    'spark_spread', 'spark_spread_lag7',
+    # Market structure (2)
+    'vrd_rdn_spread', 'vrd_rdn_ratio',
+]
+
 def train_quantile_models(data_df, force=False):
     """Train XGBoost quantile regression (P10, P50, P90) for midday solar dip hours."""
     models = {}
@@ -35,33 +108,7 @@ def train_quantile_models(data_df, force=False):
         except Exception:
             pass
 
-    feature_cols = [
-        'hour', 'dayofweek', 'month', 'day',
-        'is_weekend', 'is_holiday',
-        'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-        'sin_dayofyear', 'cos_dayofyear',
-        'sin_hour_of_week', 'cos_hour_of_week',
-        'temperature', 'temperature_squared',
-        'humidity', 'solar_radiation',
-        'solar_index', 'wind_index', 'renewable_index',
-        'nuclear_share', 'thermal_share', 'hydro_share',
-        'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
-        'days_since_epoch',
-        'solar_irradiance', 'solar_intensity',
-        'is_solar_dip_hour',
-        'demand_proxy', 'cooling_demand', 'heating_demand',
-        'price_lag_24h', 'price_lag_168h',
-        'price_rolling_mean_24h', 'price_rolling_std_24h',
-        'price_delta_1h', 'price_vs_yesterday',
-        'solar_x_hour', 'wind_x_hour',
-        'ttf_eur_mwh', 'gas_uah_mwh',
-        'vrd_rdn_spread',
-        'is_month_start', 'is_month_end',
-        'day_of_month', 'week_of_year',
-        'season', 'is_heating_season', 'is_cooling_season',
-    ]
-
-    available = [c for c in feature_cols if c in data_df.columns]
+    available = [c for c in FEATURE_COLS if c in data_df.columns]
     df = data_df.dropna(subset=['price'] + available).copy()
     df = df[df['hour'].between(9, 19)]
     if len(df) < 500:
@@ -120,33 +167,7 @@ def train_quantile_models(data_df, force=False):
 
 def cross_validate_timeseries(data_df, n_splits=5):
     """TimeSeriesSplit cross-validation for robust model evaluation."""
-    feature_cols = [
-        'hour', 'dayofweek', 'month', 'day',
-        'is_weekend', 'is_holiday',
-        'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-        'sin_dayofyear', 'cos_dayofyear',
-        'sin_hour_of_week', 'cos_hour_of_week',
-        'temperature', 'temperature_squared',
-        'humidity', 'solar_radiation',
-        'solar_index', 'wind_index', 'renewable_index',
-        'nuclear_share', 'thermal_share', 'hydro_share',
-        'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
-        'days_since_epoch',
-        'solar_irradiance', 'solar_intensity',
-        'is_solar_dip_hour',
-        'demand_proxy', 'cooling_demand', 'heating_demand',
-        'price_lag_24h', 'price_lag_168h',
-        'price_rolling_mean_24h', 'price_rolling_std_24h',
-        'price_delta_1h', 'price_vs_yesterday',
-        'solar_x_hour', 'wind_x_hour',
-        'ttf_eur_mwh', 'gas_uah_mwh',
-        'vrd_rdn_spread',
-        'is_month_start', 'is_month_end',
-        'day_of_month', 'week_of_year',
-        'season', 'is_heating_season', 'is_cooling_season',
-    ]
-
-    available = [c for c in feature_cols if c in data_df.columns]
+    available = [c for c in FEATURE_COLS if c in data_df.columns]
     df = data_df.dropna(subset=['price'] + available).copy()
     if len(df) < 2000:
         print(f"[CV] Not enough data: {len(df)} rows")
@@ -215,33 +236,7 @@ def train_model(data_df, force=False):
         except Exception:
             pass
 
-    feature_cols = [
-        'hour', 'dayofweek', 'month', 'day',
-        'is_weekend', 'is_holiday',
-        'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-        'sin_dayofyear', 'cos_dayofyear',
-        'sin_hour_of_week', 'cos_hour_of_week',
-        'temperature', 'temperature_squared',
-        'humidity', 'solar_radiation',
-        'solar_index', 'wind_index', 'renewable_index',
-        'nuclear_share', 'thermal_share', 'hydro_share',
-        'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
-        'days_since_epoch',
-        'solar_irradiance', 'solar_intensity',
-        'is_solar_dip_hour',
-        'demand_proxy', 'cooling_demand', 'heating_demand',
-        'price_lag_24h', 'price_lag_168h',
-        'price_rolling_mean_24h', 'price_rolling_std_24h',
-        'price_delta_1h', 'price_vs_yesterday',
-        'solar_x_hour', 'wind_x_hour',
-        'ttf_eur_mwh', 'gas_uah_mwh',
-        'vrd_rdn_spread',
-        'is_month_start', 'is_month_end',
-        'day_of_month', 'week_of_year',
-        'season', 'is_heating_season', 'is_cooling_season',
-    ]
-
-    available = [c for c in feature_cols if c in data_df.columns]
+    available = [c for c in FEATURE_COLS if c in data_df.columns]
     df = data_df.dropna(subset=['price'] + available).copy()
     if len(df) < 1000:
         return None, None
@@ -378,20 +373,7 @@ def predict_hourly(model, features_df):
     if model is None:
         return None
     metrics = load_metrics()
-    feature_cols = metrics['feature_cols'] if metrics else [
-        'hour', 'dayofweek', 'month', 'day',
-        'is_weekend', 'is_holiday',
-        'sin_hour', 'cos_hour', 'sin_month', 'cos_month',
-        'temperature',
-        'humidity',
-        'solar_radiation',
-        'solar_index', 'wind_index', 'renewable_index',
-        'nuclear_share', 'thermal_share', 'hydro_share',
-        'solar_share', 'wind_share', 'res_share', 'total_gen_mw',
-        'days_since_epoch',
-        'solar_irradiance', 'solar_intensity',
-        'is_solar_dip_hour',
-    ]
+    feature_cols = metrics['feature_cols'] if metrics else FEATURE_COLS
     available = [c for c in feature_cols if c in features_df.columns]
     missing = [c for c in feature_cols if c not in features_df.columns]
     for c in missing:
