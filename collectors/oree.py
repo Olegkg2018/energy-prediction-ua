@@ -226,18 +226,16 @@ def update_oree_prices():
         target_months.add(d.to_period('M'))
         d += pd.DateOffset(months=1)
 
-    # If the last cached day is within the last 3 days and has < 24 hours,
-    # re-fetch the current month (it may be incomplete)
+    # If the last cached day is behind today, re-fetch the current month
+    # (handles gaps where OREE has data we haven't cached yet)
     if existing is not None and len(existing) > 0:
         last_dt = pd.to_datetime(existing['datetime']).max()
         last_date = last_dt.date()
         today_date = today.date()
-        three_days_ago = today_date - timedelta(days=3)
-        if three_days_ago <= last_date <= today_date + timedelta(days=1):
-            hours_on_last_date = existing[pd.to_datetime(existing['datetime']).dt.date == last_date]
-            if len(hours_on_last_date) < 24:
-                current_month = pd.Timestamp(today.year, today.month, 1).to_period('M')
-                existing_months.discard(current_month)
+        yesterday_date = today_date - timedelta(days=1)
+        if last_date < yesterday_date:
+            current_month = pd.Timestamp(today.year, today.month, 1).to_period('M')
+            existing_months.discard(current_month)
 
     missing = sorted(target_months - existing_months)
     if not missing and existing is not None:
