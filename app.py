@@ -614,4 +614,4 @@ if __name__ == '__main__':
     print(f"Локації погоди ВДЕ: Південь, Запоріжжя, Дніпро, Одеса, Карпати")
     print(f"Генерація ОЕС: {'ENTSO-E' if os.environ.get('ENTSOE_API_KEY') else 'Семпловані дані'}")
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('FLASK_DEBUG', '0') == '1')
