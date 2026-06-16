@@ -1,9 +1,17 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import os
 
-# Load real April data for calibration
-df = pd.read_feather('/home/oleg/k2/energy_prediction/data/oree_prices.feather')
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+OREE_CACHE = os.path.join(DATA_DIR, 'oree_prices.feather')
+
+# Load real data for calibration
+if not os.path.exists(OREE_CACHE):
+    print(f"Error: {OREE_CACHE} not found. Run OREE fetch first.")
+    exit(1)
+
+df = pd.read_feather(OREE_CACHE)
 df['datetime'] = pd.to_datetime(df['datetime'])
 apr = df[df['datetime'].dt.month == 4]
 
@@ -91,7 +99,7 @@ print('\nJan-Mar 2026 stats:')
 print(f'  Mean: {synth_df["price"].mean():.0f}, Median: {synth_df["price"].median():.0f}')
 
 # Load existing OREE data
-existing = pd.read_feather('/home/oleg/k2/energy_prediction/data/oree_prices.feather')
+existing = pd.read_feather(OREE_CACHE)
 existing['datetime'] = pd.to_datetime(existing['datetime'])
 
 # Combine and save
@@ -99,7 +107,7 @@ combined = pd.concat([synth_df, existing], ignore_index=True)
 combined = combined.sort_values('datetime').reset_index(drop=True)
 
 # Save
-combined.to_feather('/home/oleg/k2/energy_prediction/data/oree_prices.feather')
+combined.to_feather(OREE_CACHE)
 print(f'\nCombined total: {len(combined)} rows')
 print(f'Date range: {combined["datetime"].min()} to {combined["datetime"].max()}')
 print(f'Months: {combined["datetime"].dt.month.value_counts().sort_index().to_dict()}')

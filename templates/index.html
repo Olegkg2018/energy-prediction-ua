@@ -77,6 +77,10 @@
                 Завантажити дані OREE
             </button>
             <span id="oree-status" style="margin-left: 1rem"></span>
+            <button class="btn btn-info" onclick="crossValidate()" style="margin-top: 1rem; margin-left: 0.5rem">
+                Cross-Validation
+            </button>
+            <span id="cv-status" style="margin-left: 1rem"></span>
         </div>
     </div>
 </div>
@@ -165,6 +169,28 @@ function fetchOreeData() {
                 setTimeout(() => location.reload(), 1500);
             } else {
                 el.textContent = 'Помилка: ' + (d.error || 'невідома');
+                el.style.color = '#f44336';
+            }
+        })
+        .catch(e => {
+            el.textContent = 'Помилка з\'єднання';
+            el.style.color = '#f44336';
+        });
+}
+
+function crossValidate() {
+    const el = document.getElementById('cv-status');
+    el.textContent = 'Запуск CV...';
+    el.style.color = '';
+    fetch('/api/cross_validate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{"n_splits": 5}' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) {
+                const cv = d.cv_result;
+                el.innerHTML = `CV MAE: ${cv.avg_mae} | R²: ${cv.avg_r2} (5 folds)`;
+                el.style.color = '#4caf50';
+            } else {
+                el.textContent = 'Помилка: ' + (d.error || 'недостатньо даних');
                 el.style.color = '#f44336';
             }
         })

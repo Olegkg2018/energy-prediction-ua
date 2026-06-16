@@ -62,15 +62,18 @@
             <h2>🧠 Методи</h2>
             <div class="method-grid">
                 <div class="method-card">
-                    <h3>🔮 XGBoost (прогноз цін)</h3>
-                    <p>Градієнтний бустинг на 300 деревах рішень. 22 ознаки включають:</p>
+                    <h3>🔮 XGBoost + LSTM Ensemble (прогноз цін)</h3>
+                    <p>Ансамбль XGBoost (800 дерев) + LSTM (128→64 нейрони) з оптимальними вагами. 134 ознаки:</p>
                     <ul>
-                        <li>Час доби (hour, sin_hour, cos_hour)</li>
-                        <li>День тижня, місяць, свята, вихідні</li>
-                        <li>Температура повітря</li>
-                        <li>Індекси ВДЕ (solar_index, wind_index, renewable_index)</li>
-                        <li>Структура генерації ОЕС (частки АЕС, ТЕС, ГЕС, СЕС, ВЕС)</li>
-                        <li>Тренд: days_since_epoch (днів від 2023-01-01)</li>
+                        <li><strong>Часові (14):</strong> hour, dayofweek, month, sin/cos_hour, sin/cos_month, sin/cos_dayofyear</li>
+                        <li><strong>Фур'є (10):</strong> гармоніки 2-го та 3-го порядку для години та місяця</li>
+                        <li><strong>Календарні (12+):</strong> вихідні, свята, bridge days, сезон, опалювальний сезон</li>
+                        <li><strong>Погода (10):</strong> температура, вологість, хмарність, радіація, heating/cooling degree</li>
+                        <li><strong>ВДЕ (5):</strong> solar_index, wind_index, renewable_index, solar/wind interactions</li>
+                        <li><strong>ОЕС (14):</strong> частки АЕС/ТЕС/ГЕС/СЕС/ВЕС, total_gen_mw, generation interactions</li>
+                        <li><strong>Цінові (38+):</strong> лаги 2h-504h, rolling stats (mean/std/min/max/median/skew/kurt), EWM, EMA, TEMA, Bollinger Bands, momentum, ROC</li>
+                        <li><strong>Газ (6):</strong> TTF, НАФТОГАЗ, spark spread, momentum</li>
+                        <li><strong>Ринок (2):</strong> ВДР-РДН spread/ratio</li>
                     </ul>
                 </div>
                 <div class="method-card">
@@ -80,8 +83,9 @@
                         <li>Обмеження потужності (1 МВт) та ємності (4 МВт·год)</li>
                         <li>ККД заряду/розряду (92%)</li>
                         <li>Тарифи на передачу (150 грн) та диспетчеризацію (50 грн)</li>
-                        <li>Ліміт циклів (1 на добу)</li>
+                        <li>Ліміт циклів (до 2 на добу)</li>
                         <li>Ручні фактори (ризик прильотів, відключення АЕС)</li>
+                        <li>Фолбек на простий сорт-алгоритм при відсутності PuLP</li>
                     </ul>
                 </div>
                 <div class="method-card">
@@ -97,6 +101,17 @@
                             <tr><td>Карпати</td><td>49.0, 24.0</td><td>0.7</td><td>1.4</td></tr>
                         </tbody>
                     </table>
+                </div>
+                <div class="method-card">
+                    <h3>🔀 Cross-Validation (TimeSeriesSplit)</h3>
+                    <p>Часовий кросс-валідація (5 фолдів) для оцінки стабільності моделі без data leakage:</p>
+                    <ul>
+                        <li><strong>Фолд 1:</strong> тренування на перших 20% → тест на наступних 20%</li>
+                        <li><strong>Фолд 2:</strong> тренування на перших 40% → тест на наступних 20%</li>
+                        <li><strong>...</strong> до фолду 5 (тренування на 80% → тест на останніх 20%)</li>
+                    </ul>
+                    <p>Кожна хвиля тестується виключно на ПІЗНІШИХ даних, ніж тренувальна — імітує реальний сценарій прогнозу майбутнього.</p>
+                    <p><strong>Метрики по фолдах:</strong> MAE, RMSE, R². Середні значення показують реальну точність моделі.</p>
                 </div>
                 <div class="method-card">
                     <h3>🔁 Спред ВДР-РДН</h3>
@@ -139,11 +154,11 @@
                 </div>
                 <div class="stat">
                     <span class="stat-label">Ознак</span>
-                    <span class="stat-value">22</span>
+                    <span class="stat-value">134</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Алгоритм</span>
-                    <span class="stat-value" style="font-size: 0.9rem">XGBoost Regressor</span>
+                    <span class="stat-value" style="font-size: 0.9rem">XGBoost + LSTM Ensemble</span>
                 </div>
             </div>
         </div>
@@ -155,29 +170,135 @@
         <div class="card">
             <h2>🗂 Структура проекту</h2>
             <div class="code-block">
-                <pre>energy_prediction/
-├── app.py                  # Flask сервер + REST API
+                <pre>energy_prediction_ua/
+├── app.py                      # Flask сервер + 22+ REST API
 ├── model/
-│   ├── train.py            # Навчання XGBoost (300 дерев, 22 ознаки)
-│   ├── predict.py          # Прогноз на добу + feature engineering
-│   └── model.pkl           # Навчена модель
+│   ├── train.py                # Навчання XGBoost + LSTM ансамбль (134 ознаки)
+│   ├── predict.py              # Прогноз на добу + feature engineering
+│   ├── lstm.py                 # LSTM модель (128→64 нейрони, sequence=48)
+│   ├── model.pkl               # XGBoost модель
+│   ├── lstm_model.keras        # LSTM модель (Keras)
+│   └── quantile_p10/p50/p90.pkl# Квантильні моделі для midday solar dip
 ├── data/
-│   ├── loader.py           # Завантаження + кешування даних
-│   ├── oree_prices.feather # Скраплені ціни OREE
-│   └── cache.feather       # Кеш об'єднаного датасету
+│   ├── loader.py               # Завантаження + кешування + 134 фічі
+│   ├── oree_prices.feather     # Скраплені ціни OREE
+│   ├── historical_weather.feather # Open-Meteo реальна погода
+│   ├── gas_prices.feather      # TTF + НАФТОГАЗ
+│   └── cache.feather           # Кеш об'єднаного датасету
 ├── collectors/
-│   ├── oree.py             # Парсинг OREE (РДН + ВДР)
-│   ├── weather.py          # OpenWeather API + синтетичний прогноз
-│   ├── renewable_index.py  # 5 зон ВДЕ + індекси генерації
-│   ├── generation_mix.py   # Генерація ОЕС (ENTSO-E / Ukrenergo)
-│   └── ukrenergo.py        # Ukrenergo історичні дані (2014-2021)
+│   ├── oree.py                 # Парсинг OREE (РДН + ВДР)
+│   ├── weather.py              # OpenWeather API + синтетичний прогноз
+│   ├── historical_weather.py   # Open-Meteo archive API (реальна погода)
+│   ├── renewable_index.py      # 5 зон ВДЕ + індекси генерації
+│   ├── generation_mix.py       # Генерація ОЕС (ENTSO-E / Ukrenergo)
+│   ├── ukrenergo.py            # Ukrenergo історичні дані (2014-2021)
+│   ├── gas_prices.py           # TTF + НАФТОГАЗ ціни газу
+│   └── data_generator.py       # Генерація стартових CSV
 ├── optimizer/
-│   └── scheduler.py        # PuLP лінійне програмування (батарея)
-├── templates/              # Jinja2 шаблони
-├── static/style.css        # CSS
-├── requirements.txt
-├── Dockerfile
-└── docker-compose.yml</pre>
+│   └── scheduler.py            # PuLP ЛП (батарея, до 2 циклів/добу)
+├── templates/                  # Jinja2 шаблони
+│   ├── base.html               # Навігація + тема + Plotly
+│   ├── index.html              # Дашборд + генерація + фактори
+│   ├── prediction.html         # Прогноз + оптимізація + порівняння
+│   └── about.html              # Документація проєкту
+├── static/style.css            # Dark/Light теми
+├── Dockerfile                  # Python 3.12 + gunicorn
+├── docker-compose.yml          # Docker Compose конфігурація
+└── requirements.txt            # Flask, XGBoost, PuLP, TensorFlow</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>📅 Щоденний гайд: максимізація доходу від УЗЕ</h2>
+            <div class="info-box">
+                <strong>Мета:</strong> щоденний прибуток від арбітражу цін РДН/ВДР через 1 МВт / 4 МВт·год батарею. Типовий дохід: <strong>$450-480/день</strong> (1.5 циклу), <strong>$150-160K/рік</strong> (330 днів).
+            </div>
+
+            <h3 style="color: var(--info); margin: 1rem 0 0.5rem;">Крок 1: Оновлення даних (06:00-07:00, щоранку)</h3>
+            <div class="factor-item">
+                <strong>Що робити:</strong> Відкрити дашборд → натиснути "Завантажити дані OREE" та "Перетренувати модель"
+                <br><small>Навіщо: OREE публікує фінальні ціни попереднього дня ~06:00. Модель потребує свіжих даних для точного прогнозу.</small>
+                <br><small>Альтернатива: POST /api/refresh_data — оновлює всі кеші (погода, OREE, ВДР, генерація).</small>
+            </div>
+
+            <h3 style="color: var(--info); margin: 1rem 0 0.5rem;">Крок 2: Прогноз на завтра (07:00-12:00)</h3>
+            <div class="factor-item">
+                <strong>Що робити:</strong> Сторінка "Прогноз" → обрати дату завтра → "Отримати прогноз"
+                <br><small>Що дивитись:</small>
+                <ul style="margin: 0.3rem 0 0 1.2rem; font-size: 0.82rem;">
+                    <li><strong>Години заряду</strong> (ціна &lt; 500 грн) — найдешевші години для купівлі</li>
+                    <li><strong>Години розряду</strong> (ціна &gt; 5000 грн) — найдорожчі години для продажу</li>
+                    <li><strong>Спред</strong> = max(розряд) - min(заряд) — цільовий спред &gt; 3000 грн/МВт·год</li>
+                    <li><strong>Профіцит (10 грн)</strong> — якщо є години &lt; 20 грн, максимально зарядити батарею</li>
+                </ul>
+            </div>
+
+            <h3 style="color: var(--info); margin: 1rem 0 0.5rem;">Крок 3: Оптимізація батареї (07:00-13:00)</h3>
+            <div class="factor-item">
+                <strong>Що робити:</strong> Натиснути "Оптимізувати батарею" → переглянути графік та таблицю
+                <br><small>Оптимізатор (PuLP) визначає:</small>
+                <ul style="margin: 0.3rem 0 0 1.2rem; font-size: 0.82rem;">
+                    <li><strong>Точний розклад</strong> заряду/розряду по годинах (до 2 циклів/добу)</li>
+                    <li><strong>Прогнозований дохід</strong> = сума (розряд × ціна) - сума (заряд × ціна) - тарифи</li>
+                    <li><strong>SoC timeline</strong> — рівень заряду батареї протягом доби</li>
+                </ul>
+            </div>
+
+            <h3 style="color: var(--info); margin: 1rem 0 0.5rem;">Крок 4: Встановлення ручних факторів (якщо потрібно)</h3>
+            <div class="factor-item">
+                <strong>Коли застосовувати:</strong>
+                <ul style="margin: 0.3rem 0 0 1.2rem; font-size: 0.82rem;">
+                    <li><strong>"Відключення АЕС"</strong> — якщо відомо про аварійний зупин атомного блоку (ціни +30%)</li>
+                    <li><strong>"Ризик прильотів" &gt; 50%</strong> — підвищує нічні ціни, коригує розклад заряду</li>
+                </ul>
+                <small>Ці фактори впливають на effective_prices в оптимізаторі, зміщуючи розклад.</small>
+            </div>
+
+            <h3 style="color: var(--info); margin: 1rem 0 0.5rem;">Крок 5: Виконання (протягом доби)</h3>
+            <div class="factor-item">
+                <strong>Що робити:</strong> Слідувати розкладу з оптимізатора. Більшість дій автоматизується через SCADA/EMS батареї.
+                <br><small>Типовий режим (1.5 циклу):</small>
+                <ul style="margin: 0.3rem 0 0 1.2rem; font-size: 0.82rem;">
+                    <li><strong>00:00-06:00</strong> — нічна зарядка (ціна мінімальна, ~2900-3500 грн)</li>
+                    <li><strong>08:00-11:00</strong> — ранковий пік → розряд (ціна ~6400-7100 грн)</li>
+                    <li><strong>11:00-15:00</strong> — сонячний профіцит → дозарядка (ціна знижується)</li>
+                    <li><strong>18:00-23:00</strong> — вечірній пік → розряд (ціна максимальна)</li>
+                </ul>
+            </div>
+
+            <h3 style="color: var(--info); margin: 1rem 0 0.5rem;">Крок 6: Аналіз та корекція (вечір, після 23:00)</h3>
+            <div class="factor-item">
+                <strong>Що робити:</strong> Порівняти прогнозовані ціни з реальними на сторінці "Прогноз" → вкладка "Порівняння прогнозу з реальними цінами OREE"
+                <br><small>Метрики для відстеження:</small>
+                <ul style="margin: 0.3rem 0 0 1.2rem; font-size: 0.82rem;">
+                    <li><strong>MAE похибки</strong> — ціль &lt; 300 грн</li>
+                    <li><strong>Фактичний дохід</strong> — порівняння з прогнозованим</li>
+                    <li><strong>Пропущені можливості</strong> — години де реальна ціна була &lt; 50 грн, а ми не зарядили</li>
+                </ul>
+            </div>
+
+            <h3 style="color: var(--warning); margin: 1rem 0 0.5rem;">Крок 7: Перетренування моделі (щотижня)</h3>
+            <div class="factor-item">
+                <strong>Що робити:</strong> Щопонеділка — "Перетренувати модель" + "Cross-Validation"
+                <br><small>Навіщо: модель адаптується до нових цінових патернів (сезонність, зміна генерації, нові СЕС/ВЕС). Cross-Validation показує стабільність.</small>
+                <br><small>Цільові метрики: R² &gt; 0.95, MAE &lt; 300 грн, CV MAE в межах ±20% від test MAE.</small>
+            </div>
+
+            <div class="info-box" style="margin-top: 1rem; border-left: 4px solid var(--success);">
+                <strong>Тижневий план доходу:</strong>
+                <table style="width: 100%; margin-top: 0.5rem;">
+                    <thead><tr><th>День</th><th>Дія</th><th>Час</th></tr></thead>
+                    <tbody>
+                        <tr><td>Пн</td><td>Перетренувати модель + CV</td><td>07:00</td></tr>
+                        <tr><td>Щодня</td><td>Оновити дані → Прогноз → Оптимізувати → Виконати</td><td>06:00-23:00</td></tr>
+                        <tr><td>Щодня</td><td>Аналіз: порівняння прогноз/реальність</td><td>23:00+</td></tr>
+                        <tr><td>Нд</td><td>Аналіз тижневого P&L, корекція параметрів</td><td>вільний час</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>

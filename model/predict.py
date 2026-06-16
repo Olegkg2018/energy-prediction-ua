@@ -294,6 +294,7 @@ def prepare_prediction_features(target_date):
             price_mean = oree_lags['price'].mean() if len(oree_lags) > 0 else 0
 
             # Extended price lags
+            lag_refs = {}
             for lag_hours, col_name in [
                 (2, 'price_lag_2h'), (3, 'price_lag_3h'), (6, 'price_lag_6h'),
                 (12, 'price_lag_12h'), (24, 'price_lag_24h'), (48, 'price_lag_48h'),
@@ -302,14 +303,24 @@ def prepare_prediction_features(target_date):
                 ref = oree_lags.copy()
                 ref['datetime'] = ref['datetime'] + pd.Timedelta(hours=lag_hours)
                 ref.rename(columns={'price': col_name}, inplace=True)
-                df = pd.merge(df, ref[['datetime', col_name]], on='datetime', how='left')
-                df[col_name] = df[col_name].fillna(price_mean)
+                lag_refs[col_name] = ref[['datetime', col_name]]
+
+            # Batch merge all lag columns at once
+            if lag_refs:
+                first_key = list(lag_refs.keys())[0]
+                merged_lags = lag_refs[first_key]
+                for col_name, ref_df in lag_refs.items():
+                    if col_name != first_key:
+                        merged_lags = pd.merge(merged_lags, ref_df, on='datetime', how='outer')
+                df = pd.merge(df, merged_lags, on='datetime', how='left')
+                for col_name in lag_refs:
+                    df[col_name] = df[col_name].fillna(price_mean)
 
             # Hour-specific rolling/technical features
             hour_features = _compute_hour_specific_price_features(oree_lags, pred_date)
             df = df.sort_values('hour').reset_index(drop=True)
-            for col_name, values in hour_features.items():
-                df[col_name] = values
+            feature_df = pd.DataFrame(hour_features, index=df.index)
+            df = pd.concat([df, feature_df], axis=1)
 
             # Gas momentum features
             if 'gas_uah_mwh' in df.columns:

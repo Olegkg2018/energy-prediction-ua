@@ -118,6 +118,35 @@
 <div class="row">
     <div class="col">
         <div class="card">
+            <h2>Forward крива (прогноз на N діб)</h2>
+            <div class="date-selector" style="margin-bottom: 0.5rem">
+                <label>Дні:</label>
+                <select id="forwardDays" style="background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:0.4rem 0.5rem;color:var(--text);font-size:0.9rem">
+                    <option value="3">3 дні</option>
+                    <option value="7" selected>7 днів</option>
+                    <option value="14">14 днів</option>
+                    <option value="30">30 днів</option>
+                </select>
+                <button class="btn btn-primary" onclick="loadForwardCurve()">Побудувати</button>
+            </div>
+            <div id="forward-chart" style="height: 350px;"></div>
+            <div id="forward-stats" style="margin-top: 0.5rem"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Фінансова модель (BESS 1 МВт / 4 МВт·год)</h2>
+            <div id="financial-model"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
             <h2>Ціни РДН (на добу наперед) та ВДР (внутрішньодобовий)</h2>
             <div id="oree-chart" style="height: 300px;"></div>
         </div>
@@ -136,6 +165,7 @@ let oreeCache = null;
 document.addEventListener('DOMContentLoaded', function() {
     loadOreePrices();
     loadManualFactors();
+    loadFinancialModel();
     // Load OREE cache first, then prediction (avoids race condition in comparison)
     loadOreePricesCache().then(loadPrediction);
 });
@@ -620,6 +650,188 @@ function loadManualFactors() {
             document.getElementById('factorNuclear').checked = f.nuclear_outage || false;
             document.getElementById('factorMissile').value = Math.round((f.missile_risk || 0) * 100);
             document.getElementById('missileRiskLabel').textContent = Math.round((f.missile_risk || 0) * 100) + '%';
+        });
+}
+
+function loadForwardCurve() {
+    const days = parseInt(document.getElementById('forwardDays').value);
+    const container = document.getElementById('forward-stats');
+    container.innerHTML = '<p>Завантаження...</p>';
+
+    fetch(`/api/forward_curve?days=${days}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                container.innerHTML = `<p class="error">${data.error}</p>`;
+                return;
+            }
+            renderForwardChart(data);
+            renderForwardStats(data);
+        });
+}
+
+function renderForwardChart(data) {
+    const curve = data.curve;
+    const byDate = {};
+    for (const p of curve) {
+        if (!byDate[p.date]) byDate[p.date] = [];
+        byDate[p.date].push(p);
+    }
+
+    const traces = [];
+    const colors = ['#FF5722', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0', '#00BCD4', '#E91E63',
+                     '#8BC34A', '#3F51B5', '#FF5252', '#009688', '#795548',
+                     '#607D8B', '#F44336', '#673AB7'];
+    let ci = 0;
+    for (const [date, pts] of Object.entries(byDate)) {
+        const sorted = pts.sort((a, b) => a.hour - b.hour);
+        traces.push({
+            x: sorted.map(p => `${date} ${String(p.hour).padStart(2, '0')}:00`),
+            y: sorted.map(p => p.price),
+            type: 'scatter', mode: 'lines+markers',
+            name: date,
+            line: { color: colors[ci % colors.length], width: 1.5 },
+            marker: { size: 4 },
+        });
+        ci++;
+    }
+
+    const avgLine = {
+        type: 'line',
+        x0: curve[0]?.date + ' 00:00',
+        y0: data.avg_price,
+        x1: curve[curve.length - 1]?.date + ' 23:00',
+        y1: data.avg_price,
+        line: { color: 'gray', width: 1, dash: 'dash' }
+    };
+
+    const isMob = window.innerWidth < 600;
+    Plotly.newPlot('forward-chart', traces, {
+        title: `Forward крива (${data.days} днів) — середня: ${data.avg_price} грн`,
+        xaxis: { title: 'Дата/час', dtick: isMob ? 'D1' : 'D1', tickangle: isMob ? 0 : -45 },
+        yaxis: { title: 'Ціна, грн/МВт·год' },
+        shapes: [avgLine],
+        height: chartH(350),
+        margin: { t: isMob ? 30 : 40, r: isMob ? 10 : 20, b: isMob ? 50 : 70, l: isMob ? 40 : 60 },
+        responsive: true,
+        autosize: true,
+        legend: { orientation: 'h', y: -0.25 }
+    });
+}
+
+function renderForwardStats(data) {
+    const container = document.getElementById('forward-stats');
+    const dailyAvg = data.daily_avg || {};
+    let html = `
+        <div class="stats-grid">
+            <div class="stat">
+                <span class="stat-label">Мін. ціна</span>
+                <span class="stat-value" style="color:var(--success)">${data.min_price} грн</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Макс. ціна</span>
+                <span class="stat-value" style="color:var(--danger)">${data.max_price} грн</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Середня</span>
+                <span class="stat-value">${data.avg_price} грн</span>
+            </div>
+        </div>
+        <div class="stats-grid" style="margin-top: 0.5rem">
+    `;
+    for (const [date, avg] of Object.entries(dailyAvg)) {
+        html += `
+            <div class="stat">
+                <span class="stat-label">${date}</span>
+                <span class="stat-value">${avg} грн</span>
+            </div>
+        `;
+    }
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function loadFinancialModel() {
+    fetch('/api/forward_curve?days=7')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const avgPrice = data.avg_price || 3000;
+            const minPrice = data.min_price || 500;
+            const maxPrice = data.max_price || 7000;
+
+            const capacity = 4;
+            const power = 1;
+            const chargeEff = 0.92;
+            const dischargeEff = 0.92;
+            const tariffTransmission = 150;
+            const tariffDispatch = 50;
+            const cyclesPerDay = 1.5;
+            const daysPerYear = 330;
+
+            const buyPrice = minPrice * 0.9;
+            const sellPrice = maxPrice * 0.85;
+            const spreadPerMwh = (sellPrice - buyPrice) * chargeEff;
+
+            const dailyRevenue = capacity * spreadPerMwh * cyclesPerDay * dischargeEff;
+            const annualArbitrage = dailyRevenue * daysPerYear;
+            const annualReserve = 40000;
+            const annualRevenue = annualArbitrage + annualReserve;
+            const annualOpex = 22000;
+            const ebitda = annualRevenue - annualOpex;
+
+            const capexLow = 1030000;
+            const capexHigh = 1290000;
+            const paybackLow = capexHigh / ebitda;
+            const paybackHigh = capexLow / ebitda;
+
+            const container = document.getElementById('financial-model');
+            container.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat">
+                        <span class="stat-label">CAPEX (BESS 4 МВт·год)</span>
+                        <span class="stat-value" style="font-size:0.9rem">$${(capexLow/1000).toFixed(0)}K – $${(capexHigh/1000).toFixed(0)}K</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Спред купівля/продаж</span>
+                        <span class="stat-value">${Math.round(buyPrice)} → ${Math.round(sellPrice)} грн</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Спред/МВт·год</span>
+                        <span class="stat-value" style="color:var(--success)">${Math.round(spreadPerMwh)} грн</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Дохід/день (1.5 циклу)</span>
+                        <span class="stat-value">${Math.round(dailyRevenue)} грн</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Арбітраж/рік</span>
+                        <span class="stat-value" style="color:var(--success)">$${Math.round(annualArbitrage/41.5)}K (${Math.round(annualArbitrage)} грн)</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">EBITDA/рік</span>
+                        <span class="stat-value" style="color:var(--success)">$${Math.round(ebitda/41.5)}K</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Окупність</span>
+                        <span class="stat-value" style="color:var(--warning)">${paybackHigh.toFixed(1)} – ${paybackLow.toFixed(1)} років</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Операційні витрати</span>
+                        <span class="stat-value">$${Math.round(annualOpex/41.5)}K/рік</span>
+                    </div>
+                </div>
+                <div class="info-box" style="margin-top: 0.75rem;">
+                    <strong>Розрахунок на основі прогнозу ${data.days} днів:</strong>
+                    <ul>
+                        <li>Середня ціна РДН: ${data.avg_price} грн/МВт·год</li>
+                        <li>Мін/Макс: ${data.min_price} / ${data.max_price} грн/МВт·год</li>
+                        <li>ККД заряду/розряду: ${Math.round(chargeEff*100)}%</li>
+                        <li>Тариф передачі: ${tariffTransmission} грн + диспетчеризація: ${tariffDispatch} грн</li>
+                        <li>Циклів/добу: ${cyclesPerDay}, днів/рік: ${daysPerYear}</li>
+                    </ul>
+                </div>
+            `;
         });
 }
 
