@@ -77,19 +77,15 @@ FEATURE_COLS = [
     'price_vs_yesterday', 'price_vs_last_week',
     'price_same_hour_yesterday', 'price_yoy_ratio',
     # Technical indicators (11)
-    'price_ema_6', 'price_ema_12', 'price_ema_24', 'price_ema_diff', 'price_tema',
+    'price_ema_6', 'price_ema_12', 'price_ema_24', 'price_ema_diff',
     'price_bb_pctb_24', 'price_bb_pctb_48',
     'price_momentum_24', 'price_momentum_48',
     'price_roc_12', 'price_roc_24',
     # Gas & fuel (6)
     'ttf_eur_mwh', 'gas_uah_mwh',
     'gas_momentum_7d', 'gas_rolling_std_7d',
-    'spark_spread', 'spark_spread_lag7',
     # Market structure (2)
     'vrd_rdn_spread', 'vrd_rdn_ratio',
-    # Market data (Yahoo Finance) (8)
-    'ttf_gas_usd', 'ttf_gas_uah', 'brent_oil_usd', 'eur_uah', 'usd_uah',
-    'ttf_change_1d', 'ttf_change_7d', 'oil_change_7d',
 ]
 
 def train_quantile_models(data_df, force=False):

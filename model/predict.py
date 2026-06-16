@@ -64,82 +64,85 @@ def _compute_hour_specific_price_features(oree_lags, pred_date):
     if len(oree_lags) == 0:
         return result
 
-    oree_sorted = oree_lags.sort_values('datetime').set_index('datetime')
-    price_series = oree_sorted['price']
-    all_prices = price_series.values
-    n = len(all_prices)
-    price_mean = price_series.mean()
+    oree_sorted = oree_lags.sort_values('datetime').copy()
+    oree_sorted['hour'] = oree_sorted['datetime'].dt.hour
+    price_mean = oree_sorted['price'].mean()
 
-    # All available prices before pred_date
-    all_prices = price_series.values
-    n = len(all_prices)
+    last_date = oree_lags['datetime'].max()
+    yesterday = last_date - pd.Timedelta(days=1)
+    yesterday_data = oree_sorted[oree_sorted['datetime'].dt.date == yesterday.date()]
+    yesterday_lookup = {}
+    for _, row in yesterday_data.iterrows():
+        yesterday_lookup[int(row['datetime'].hour)] = float(row['price'])
 
-    # Rolling stats at last known point
-    for window, prefix in [(24, '24h'), (48, '48h'), (168, '168h')]:
-        if n >= 1:
-            tail = all_prices[-min(window, n):]
-            result[f'price_rolling_mean_{prefix}'] = [float(np.mean(tail))] * 24
-            result[f'price_rolling_std_{prefix}'] = [float(np.std(tail, ddof=1)) if len(tail) > 1 else 0] * 24
-            result[f'price_rolling_min_{prefix}'] = [float(np.min(tail))] * 24
-            result[f'price_rolling_max_{prefix}'] = [float(np.max(tail))] * 24
-    if n > 0:
-        result['price_rolling_median_24h'] = [float(np.median(all_prices[-24:]))] * 24
-    if n >= 24:
-        tail168 = all_prices[-min(168, n):]
-        if len(tail168) > 10:
-            result['price_rolling_skew_168h'] = [float(pd.Series(tail168).skew())] * 24
-            result['price_rolling_kurt_168h'] = [float(pd.Series(tail168).kurtosis())] * 24
-    result['price_range_48h'] = [result['price_rolling_max_48h'][0] - result['price_rolling_min_48h'][0]] * 24
-    result['price_range_168h'] = [result['price_rolling_max_168h'][0] - result['price_rolling_min_168h'][0]] * 24
+    hour_prices = {}
+    for h in range(24):
+        hour_prices[h] = oree_sorted[oree_sorted['hour'] == h].sort_values('datetime')['price'].values
 
-    # EWM
-    ewm = pd.Series(all_prices).ewm(span=12, adjust=False).mean()
-    result['price_ewm_12h'] = [float(ewm.iloc[-1])] * 24
-    ewm48 = pd.Series(all_prices).ewm(span=48, adjust=False).mean()
-    result['price_ewm_48h'] = [float(ewm48.iloc[-1])] * 24
+    for h in range(24):
+        hp = hour_prices[h]
+        nh = len(hp)
+        yest = yesterday_lookup.get(h, price_mean)
+        result['price_same_hour_yesterday'][h] = yest
+        if nh == 0:
+            continue
+        last = float(hp[-1])
 
-    # Deltas — use lagged deltas (price[t-1] - price[t-2] etc)
-    if n >= 2:
-        result['price_delta_1h'] = [float(all_prices[-2] - all_prices[-3]) if n >= 3 else 0] * 24
-    if n >= 4:
-        result['price_delta_3h'] = [float(all_prices[-4] - all_prices[-7]) if n >= 7 else 0] * 24
-    if n >= 7:
-        result['price_delta_6h'] = [float(all_prices[-7] - all_prices[-13]) if n >= 13 else 0] * 24
-    if n >= 25:
-        result['price_delta_24h'] = [float(all_prices[-25] - all_prices[-49]) if n >= 49 else 0] * 24
+        for window, prefix in [(7, '24h'), (14, '48h'), (90, '168h')]:
+            tail = hp[-min(window, nh):]
+            result[f'price_rolling_mean_{prefix}'][h] = float(np.mean(tail))
+            result[f'price_rolling_std_{prefix}'][h] = float(np.std(tail, ddof=1)) if len(tail) > 1 else 0
+            result[f'price_rolling_min_{prefix}'][h] = float(np.min(tail))
+            result[f'price_rolling_max_{prefix}'][h] = float(np.max(tail))
 
-    # Yesterday delta vs 48h ago
-    if n > 48:
-        result['price_vs_yesterday'] = [float(all_prices[-25] - all_prices[-49])] * 24
-        result['price_momentum_24'] = [float(all_prices[-25] - all_prices[-49])] * 24
-    if n > 168:
-        result['price_vs_last_week'] = [float(all_prices[-169] - all_prices[-337]) if n > 337 else 0] * 24
-        result['price_momentum_48'] = [float(all_prices[-49] - all_prices[-169]) if n > 169 else 0] * 24
+        if nh >= 3:
+            result['price_rolling_median_24h'][h] = float(np.median(hp[-min(7, nh):]))
+        if nh >= 10:
+            t168 = hp[-min(90, nh):]
+            result['price_rolling_skew_168h'][h] = float(pd.Series(t168).skew())
+            result['price_rolling_kurt_168h'][h] = float(pd.Series(t168).kurtosis())
 
-    # Same hour yesterday (lag only)
-    result['price_same_hour_yesterday'] = [float(all_prices[-25]) if n > 24 else price_mean] * 24
-    result['price_yoy_ratio'] = [float(all_prices[-25] / max(all_prices[-49], 1)) if n > 49 else 1.0] * 24
+        result['price_range_48h'][h] = result['price_rolling_max_48h'][h] - result['price_rolling_min_48h'][h]
+        result['price_range_168h'][h] = result['price_rolling_max_168h'][h] - result['price_rolling_min_168h'][h]
 
-    # ROC (lagged)
-    result['price_roc_12'] = [float((all_prices[-13] / max(all_prices[-25], 1)) - 1) if n > 25 else 0] * 24
-    result['price_roc_24'] = [float((all_prices[-25] / max(all_prices[-49], 1)) - 1) if n > 49 else 0] * 24
+        if nh >= 2:
+            result['price_ewm_12h'][h] = float(pd.Series(hp).ewm(span=min(3, nh), adjust=False).mean().iloc[-1])
+            result['price_ewm_48h'][h] = float(pd.Series(hp).ewm(span=min(7, nh), adjust=False).mean().iloc[-1])
 
-    # EMA & TEMA
-    for span, col in [(6, 'price_ema_6'), (12, 'price_ema_12'), (24, 'price_ema_24')]:
-        ema_val = pd.Series(all_prices).ewm(span=span, adjust=False).mean().iloc[-1]
-        result[col] = [float(ema_val)] * 24
-    result['price_ema_diff'] = [result['price_ema_6'][0] - result['price_ema_24'][0]] * 24
-    result['price_tema'] = [3 * result['price_ema_6'][0] - 3 * result['price_ema_12'][0] + result['price_ema_6'][0]] * 24
+        if nh >= 2:
+            result['price_delta_1h'][h] = float(hp[-1] - hp[-2])
+        if nh >= 3:
+            result['price_delta_3h'][h] = float(hp[-1] - hp[-3])
+        if nh >= 7:
+            result['price_delta_6h'][h] = float(hp[-1] - hp[-6])
+        if nh >= 8:
+            result['price_delta_24h'][h] = float(hp[-1] - hp[-7])
 
-    # Bollinger Bands
-    for bb_window, suffix in [(24, '24'), (48, '48')]:
-        tail_bb = all_prices[-min(bb_window, n):]
-        bb_ma = np.mean(tail_bb)
-        bb_std = np.std(tail_bb, ddof=1) if len(tail_bb) > 1 else 0
-        bb_upper = bb_ma + 2 * bb_std
-        bb_lower = bb_ma - 2 * bb_std
-        bb_range = max(bb_upper - bb_lower, 1)
-        result[f'price_bb_pctb_{suffix}'] = [float((all_prices[-1] - bb_lower) / bb_range)] * 24
+        if nh >= 3:
+            result['price_vs_yesterday'][h] = float(hp[-1] - hp[-2])
+            result['price_momentum_24'][h] = float(hp[-1] - hp[-2])
+        if nh >= 8:
+            result['price_vs_last_week'][h] = float(hp[-1] - hp[-7])
+            result['price_momentum_48'][h] = float(hp[-2] - hp[-7])
+
+        for span, col in [(3, 'price_ema_6'), (5, 'price_ema_12'), (7, 'price_ema_24')]:
+            result[col][h] = float(pd.Series(hp).ewm(span=min(span, nh), adjust=False).mean().iloc[-1])
+        result['price_ema_diff'][h] = result['price_ema_6'][h] - result['price_ema_24'][h]
+        result['price_tema'][h] = 3 * result['price_ema_6'][h] - 3 * result['price_ema_12'][h] + result['price_ema_6'][h]
+
+        for bb_window, suffix in [(7, '24'), (14, '48')]:
+            tail_bb = hp[-min(bb_window, nh):]
+            bb_ma = np.mean(tail_bb)
+            bb_std = np.std(tail_bb, ddof=1) if len(tail_bb) > 1 else 0
+            bb_upper = bb_ma + 2 * bb_std
+            bb_lower = bb_ma - 2 * bb_std
+            result[f'price_bb_pctb_{suffix}'][h] = float((last - bb_lower) / max(bb_upper - bb_lower, 1))
+
+        if nh >= 3:
+            result['price_roc_12'][h] = float((hp[-1] / max(hp[-2], 1)) - 1)
+        if nh >= 8:
+            result['price_roc_24'][h] = float((hp[-1] / max(hp[-7], 1)) - 1)
+            result['price_yoy_ratio'][h] = float(hp[-1] / max(hp[-7], 1))
 
     return result
 
