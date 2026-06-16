@@ -100,6 +100,73 @@ def fetch_entsoe_data(days_back=7):
         print(f"[GENMIX] ENTSO-E fetch error: {e}")
     return None
 
+OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast'
+UA_LAT, UA_LON = 48.5, 31.0
+TOTAL_SOLAR_CAPACITY_MW = 6000
+TOTAL_WIND_CAPACITY_MW = 2000
+SOLAR_CF = 0.15
+WIND_CF = 0.30
+
+def fetch_open_meteo_weather():
+    params = {
+        'latitude': UA_LAT, 'longitude': UA_LON,
+        'hourly': 'shortwave_radiation,wind_speed_10m,cloud_cover',
+        'timezone': 'Europe/Kyiv',
+        'past_days': 3, 'forecast_days': 1,
+    }
+    try:
+        resp = requests.get(OPEN_METEO_URL, params=params, timeout=15)
+        if resp.status_code == 200:
+            return resp.json().get('hourly', None)
+    except Exception as e:
+        print(f"[GENMIX] Open-Meteo error: {e}")
+    return None
+
+def estimate_solar_mw(radiation, hour):
+    if radiation <= 0 or hour < 5 or hour > 21:
+        return 0
+    capacity_factor = min(radiation / 1000, 1.0) * SOLAR_CF
+    return round(TOTAL_SOLAR_CAPACITY_MW * capacity_factor, 1)
+
+def estimate_wind_mw(wind_speed):
+    v = wind_speed
+    if v < 3:
+        return 0
+    if v > 25:
+        cf = 0.0
+    elif v > 12:
+        cf = WIND_CF
+    else:
+        cf = WIND_CF * ((v - 3) / 9) ** 3
+    return round(TOTAL_WIND_CAPACITY_MW * cf, 1)
+
+def fetch_real_solar_wind(days=7):
+    hourly = fetch_open_meteo_weather()
+    if not hourly or 'time' not in hourly:
+        return None
+    times = hourly['time']
+    radiation = hourly.get('shortwave_radiation', [0]*len(times))
+    wind_speed = hourly.get('wind_speed_10m', [0]*len(times))
+    rows = []
+    for i, t in enumerate(times):
+        dt = pd.Timestamp(t)
+        r = radiation[i] if i < len(radiation) else 0
+        w = wind_speed[i] if i < len(wind_speed) else 0
+        rows.append({
+            'datetime': dt,
+            'date': dt.strftime('%Y-%m-%d'),
+            'hour': dt.hour,
+            'solar_radiation': r,
+            'wind_speed': w,
+            'solar_mw': estimate_solar_mw(r, dt.hour),
+            'wind_mw': estimate_wind_mw(w),
+        })
+    df = pd.DataFrame(rows)
+    end = datetime.now().replace(minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=days)
+    df = df[(df['datetime'] >= start) & (df['datetime'] <= end)]
+    return df if len(df) > 0 else None
+
 def generate_sample_mix(days=7):
     np.random.seed(42)
     rows = []
@@ -186,6 +253,7 @@ def get_generation_mix(days=7):
         latest = pd.to_datetime(cached['datetime']).max()
         if datetime.now() - latest < timedelta(hours=6):
             return to_aggregated(cached)
+
     rows = fetch_entsoe_data(days)
     if rows and len(rows) > 0:
         df = pd.DataFrame(rows)
@@ -221,17 +289,21 @@ def get_generation_mix(days=7):
         pivoted = pivoted[['datetime', 'date', 'hour'] + type_cols + ['total_gen_mw', 'import_balance_mw']]
         save_cache(pivoted)
         return to_aggregated(pivoted)
-    try:
-        ukr = get_ukrenergo_data()
-        if ukr is not None and len(ukr) > 0:
-            ukr_latest = pd.to_datetime(ukr['datetime']).max()
-            if ukr_latest > datetime.now() - timedelta(days=365):
-                return to_aggregated(ukr)
-    except Exception:
-        pass
-    sample = generate_sample_mix(days)
-    save_cache(sample)
-    return to_aggregated(sample)
+
+    real_sw = fetch_real_solar_wind(days)
+    synth = generate_sample_mix(days)
+    if real_sw is not None and len(real_sw) > 0:
+        synth = synth.merge(
+            real_sw[['datetime', 'solar_mw', 'wind_mw']],
+            on='datetime', how='left', suffixes=('_syn', '')
+        )
+        synth['solar_mw'] = synth['solar_mw'].fillna(synth['solar_mw_syn'])
+        synth['wind_mw'] = synth['wind_mw'].fillna(synth['wind_mw_syn'])
+        synth.drop(columns=['solar_mw_syn', 'wind_mw_syn'], errors='ignore', inplace=True)
+        synth['total_gen_mw'] = synth[['nuclear_mw', 'thermal_mw', 'hydro_mw', 'solar_mw', 'wind_mw', 'other_res_mw']].sum(axis=1)
+        print(f"[GENMIX] Real СЕС/ВЕС from Open-Meteo integrated ({len(real_sw)} hours)")
+    save_cache(synth)
+    return to_aggregated(synth)
 
 def get_generation_stats(days=7):
     df = get_generation_mix(days)
