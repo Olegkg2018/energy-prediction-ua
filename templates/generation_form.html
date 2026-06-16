@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}Ввід генерації - Energy Predictor UA{% endblock %}
+{% block content %}
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Дані генерації ОЕС (ручний ввід)</h2>
+            <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:0.75rem;">
+                Введіть фактичні дані генерації по типах для точної роботи моделі. Оновлюється щоранку.
+            </p>
+            <div class="date-selector">
+                <label for="genDate">Дата:</label>
+                <input type="date" id="genDate" value="{{ today }}">
+                <button class="btn btn-primary" onclick="loadGenData()">Завантажити</button>
+                <button class="btn btn-info" onclick="saveGenData()">Зберегти</button>
+                <button class="btn btn-secondary" onclick="fillDefaults()">Заповнити типовими</button>
+                <span id="genStatus" style="margin-left:0.5rem"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Погодинні дані генерації (МВт)</h2>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Година</th>
+                            <th style="color:#4CAF50">АЕС</th>
+                            <th style="color:#FF9800">ТЕС</th>
+                            <th style="color:#2196F3">ГЕС</th>
+                            <th style="color:#FFC107">СЕС</th>
+                            <th style="color:#9C27B0">ВЕС</th>
+                            <th style="color:var(--text-muted)">Всього</th>
+                        </tr>
+                    </thead>
+                    <tbody id="genTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <h2>Графік генерації</h2>
+            <div id="genChart" style="height: 350px;"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let genData = [];
+
+const defaults = {
+    nuclear: 4500,
+    thermal: 1800,
+    hydro: 600,
+    solar: 0,
+    wind: 800
+};
+
+const hourProfiles = {
+    nuclear: Array(24).fill(null).map(() => 4500 + (Math.random()-0.5)*600),
+    thermal: Array(24).fill(0).map((_, h) => {
+        let base = 1800;
+        if (h >= 7 && h <= 10) base += 600;
+        if (h >= 17 && h <= 21) base += 800;
+        if (h >= 0 && h <= 5) base -= 400;
+        return base + (Math.random()-0.5)*300;
+    }),
+    hydro: Array(24).fill(0).map((_, h) => {
+        let base = 600;
+        if (h >= 8 && h <= 11) base += 200;
+        if (h >= 18 && h <= 21) base += 300;
+        return base + (Math.random()-0.5)*100;
+    }),
+    solar: Array(24).fill(0).map((_, h) => {
+        if (h < 6 || h > 20) return 0;
+        return Math.max(0, 2500 * Math.sin(Math.PI * (h - 6) / 14) * (0.7 + Math.random()*0.3));
+    }),
+    wind: Array(24).fill(0).map((_, h) => {
+        let base = 800;
+        if (h >= 22 || h <= 4) base *= 1.3;
+        return Math.max(0, base + (Math.random()-0.5)*400);
+    })
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+    initTable();
+    loadGenData();
+});
+
+function initTable() {
+    let html = '';
+    for (let h = 0; h < 24; h++) {
+        const hh = String(h+1).padStart(2,'0') + ':00';
+        html += `<tr>
+            <td><strong>${hh}</strong></td>
+            <td><input type="number" id="n${h}" value="0" step="10" min="0" onchange="updateTotal(${h})"></td>
+            <td><input type="number" id="t${h}" value="0" step="10" min="0" onchange="updateTotal(${h})"></td>
+            <td><input type="number" id="g${h}" value="0" step="10" min="0" onchange="updateTotal(${h})"></td>
+            <td><input type="number" id="s${h}" value="0" step="10" min="0" onchange="updateTotal(${h})"></td>
+            <td><input type="number" id="w${h}" value="0" step="10" min="0" onchange="updateTotal(${h})"></td>
+            <td id="tot${h}" style="color:var(--text-muted)">0</td>
+        </tr>`;
+    }
+    document.getElementById('genTableBody').innerHTML = html;
+}
+
+function updateTotal(h) {
+    const n = parseFloat(document.getElementById('n'+h).value)||0;
+    const t = parseFloat(document.getElementById('t'+h).value)||0;
+    const g = parseFloat(document.getElementById('g'+h).value)||0;
+    const s = parseFloat(document.getElementById('s'+h).value)||0;
+    const w = parseFloat(document.getElementById('w'+h).value)||0;
+    document.getElementById('tot'+h).textContent = Math.round(n+t+g+s+w);
+}
+
+function collectData() {
+    genData = [];
+    for (let h = 0; h < 24; h++) {
+        genData.push({
+            hour: h,
+            nuclear_mw: parseFloat(document.getElementById('n'+h).value)||0,
+            thermal_mw: parseFloat(document.getElementById('t'+h).value)||0,
+            hydro_mw: parseFloat(document.getElementById('g'+h).value)||0,
+            solar_mw: parseFloat(document.getElementById('s'+h).value)||0,
+            wind_mw: parseFloat(document.getElementById('w'+h).value)||0
+        });
+    }
+    return genData;
+}
+
+function fillDefaults() {
+    for (let h = 0; h < 24; h++) {
+        document.getElementById('n'+h).value = Math.round(hourProfiles.nuclear[h]);
+        document.getElementById('t'+h).value = Math.round(hourProfiles.thermal[h]);
+        document.getElementById('g'+h).value = Math.round(hourProfiles.hydro[h]);
+        document.getElementById('s'+h).value = Math.round(hourProfiles.solar[h]);
+        document.getElementById('w'+h).value = Math.round(hourProfiles.wind[h]);
+        updateTotal(h);
+    }
+    renderChart();
+}
+
+function loadGenData() {
+    const date = document.getElementById('genDate').value;
+    fetch(`/api/generation_manual?date=${date}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            if (data.hours && data.hours.length > 0) {
+                for (const h of data.hours) {
+                    const i = h.hour;
+                    document.getElementById('n'+i).value = Math.round(h.nuclear_mw||0);
+                    document.getElementById('t'+i).value = Math.round(h.thermal_mw||0);
+                    document.getElementById('g'+i).value = Math.round(h.hydro_mw||0);
+                    document.getElementById('s'+i).value = Math.round(h.solar_mw||0);
+                    document.getElementById('w'+i).value = Math.round(h.wind_mw||0);
+                    updateTotal(i);
+                }
+                const st = document.getElementById('genStatus');
+                if (data.copied_from) {
+                    st.textContent = `Скопійовано з ${data.copied_from}`;
+                    st.style.color = 'var(--warning)';
+                } else {
+                    st.textContent = `Завантажено ${date}`;
+                    st.style.color = 'var(--success)';
+                }
+            } else {
+                fillDefaults();
+                document.getElementById('genStatus').textContent = 'Заповнено типовими значеннями';
+                document.getElementById('genStatus').style.color = 'var(--warning)';
+            }
+            renderChart();
+        });
+}
+
+function saveGenData() {
+    const date = document.getElementById('genDate').value;
+    const hours = collectData();
+    const st = document.getElementById('genStatus');
+    st.textContent = 'Збереження...';
+    st.style.color = '';
+
+    fetch('/api/generation_manual', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({date: date, hours: hours})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            st.textContent = data.message;
+            st.style.color = 'var(--success)';
+        } else {
+            st.textContent = 'Помилка: ' + data.error;
+            st.style.color = 'var(--danger)';
+        }
+    });
+}
+
+function renderChart() {
+    collectData();
+    const labels = Array.from({length:24}, (_,i) => `${String(i+1).padStart(2,'0')}:00`);
+    const isMob = window.innerWidth < 600;
+
+    Plotly.newPlot('genChart', [
+        {x: labels, y: genData.map(d => d.nuclear_mw), name: 'АЕС', type: 'scatter', mode: 'lines', line: {color: '#4CAF50', width: 2}},
+        {x: labels, y: genData.map(d => d.thermal_mw), name: 'ТЕС', type: 'scatter', mode: 'lines', line: {color: '#FF9800', width: 2}},
+        {x: labels, y: genData.map(d => d.hydro_mw), name: 'ГЕС', type: 'scatter', mode: 'lines', line: {color: '#2196F3', width: 2}},
+        {x: labels, y: genData.map(d => d.solar_mw), name: 'СЕС', type: 'scatter', fill: 'tozeroy', line: {color: '#FFC107', width: 1}, fillcolor: 'rgba(255,193,7,0.2)'},
+        {x: labels, y: genData.map(d => d.wind_mw), name: 'ВЕС', type: 'scatter', mode: 'lines', line: {color: '#9C27B0', width: 2, dash: 'dot'}},
+    ], {
+        title: 'Генерація ОЕС по типах',
+        xaxis: {title: 'Година', dtick: isMob ? 4 : 2},
+        yaxis: {title: 'Потужність, МВт'},
+        height: chartH(350),
+        margin: {t: isMob ? 30 : 40, r: isMob ? 10 : 20, b: isMob ? 30 : 40, l: isMob ? 40 : 60},
+        responsive: true,
+        autosize: true
+    });
+}
+
+function chartH(d) { return window.innerWidth < 600 ? Math.min(d*0.55, 280) : d; }
+</script>
+{% endblock %}

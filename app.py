@@ -565,6 +565,37 @@ def api_renewable_index():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/generate-form')
+def generate_form_page():
+    return render_template('generation_form.html')
+
+@app.route('/api/generation_manual', methods=['GET'])
+def api_generation_manual_get():
+    from collectors.manual_generation import get_generation, get_available_dates
+    date = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+    hours = get_generation(date)
+    if hours is None:
+        prev_date = (datetime.strptime(date, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
+        hours = get_generation(prev_date)
+        if hours:
+            return jsonify({'success': True, 'hours': hours, 'date': date, 'copied_from': prev_date})
+        return jsonify({'success': True, 'hours': [], 'date': date})
+    return jsonify({'success': True, 'hours': hours, 'date': date})
+
+@app.route('/api/generation_manual', methods=['POST'])
+def api_generation_manual_post():
+    from collectors.manual_generation import save_generation
+    data = request.get_json()
+    if not data or 'date' not in data or 'hours' not in data:
+        return jsonify({'success': False, 'error': 'Потрібно date та hours'})
+    save_generation(data['date'], data['hours'])
+    return jsonify({'success': True, 'message': f"Дані за {data['date']} збережено ({len(data['hours'])} годин)"})
+
+@app.route('/api/generation_manual/dates')
+def api_generation_manual_dates():
+    from collectors.manual_generation import get_available_dates
+    return jsonify({'success': True, 'dates': get_available_dates()})
+
 if __name__ == '__main__':
     print("=" * 60)
     print("Енергетичний прогнозатор - Україна")

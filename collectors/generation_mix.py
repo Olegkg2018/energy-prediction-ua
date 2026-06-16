@@ -175,6 +175,12 @@ def save_cache(df):
         pass
 
 def get_generation_mix(days=7):
+    from collectors.manual_generation import get_generation_as_dataframe
+    today = datetime.now().strftime('%Y-%m-%d')
+    manual_df = get_generation_as_dataframe(today)
+    if manual_df is not None and len(manual_df) >= 20:
+        return to_aggregated(manual_df)
+
     cached = load_cache()
     if cached is not None:
         latest = pd.to_datetime(cached['datetime']).max()
