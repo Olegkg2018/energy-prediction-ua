@@ -102,9 +102,8 @@ def fetch_entsoe_data(days_back=7):
 
 OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast'
 UA_LAT, UA_LON = 48.5, 31.0
-TOTAL_SOLAR_CAPACITY_MW = 6000
+TOTAL_SOLAR_CAPACITY_MW = 15000
 TOTAL_WIND_CAPACITY_MW = 2000
-SOLAR_CF = 0.15
 WIND_CF = 0.30
 
 def fetch_open_meteo_weather():
@@ -125,7 +124,7 @@ def fetch_open_meteo_weather():
 def estimate_solar_mw(radiation, hour):
     if radiation <= 0 or hour < 5 or hour > 21:
         return 0
-    capacity_factor = min(radiation / 1000, 1.0) * SOLAR_CF
+    capacity_factor = min(radiation / 1000, 1.0)
     return round(TOTAL_SOLAR_CAPACITY_MW * capacity_factor, 1)
 
 def estimate_wind_mw(wind_speed):
@@ -135,10 +134,10 @@ def estimate_wind_mw(wind_speed):
     if v > 25:
         cf = 0.0
     elif v > 12:
-        cf = WIND_CF
+        cf = 0.35
     else:
-        cf = WIND_CF * ((v - 3) / 9) ** 3
-    return round(TOTAL_WIND_CAPACITY_MW * cf, 1)
+        cf = 0.35 * ((v - 3) / 9) ** 2
+    return round(TOTAL_WIND_CAPACITY_MW * min(cf, 0.35), 1)
 
 def fetch_real_solar_wind(days=7):
     hourly = fetch_open_meteo_weather()
@@ -178,14 +177,14 @@ def generate_sample_mix(days=7):
         month = ts.month
         is_winter = month in [12, 1, 2]
         is_summer = month in [6, 7, 8]
-        nuclear = np.random.normal(7500, 300)
-        thermal = np.random.normal(3000 if is_winter else 2000, 400)
+        nuclear = np.random.normal(4500, 200)
+        thermal = np.random.normal(1800 if is_winter else 1300, 300)
         if 8 <= hour <= 11 or 17 <= hour <= 21:
-            thermal += 500
-        hydro = np.random.normal(800, 150)
+            thermal += 400
+        hydro = np.random.normal(600, 120)
         solar = 0
         if 6 <= hour <= 19:
-            solar = np.random.normal(2500, 500) * np.sin(np.pi * (hour - 6) / 13)
+            solar = np.random.normal(6000, 1200) * np.sin(np.pi * (hour - 6) / 13)
             solar = max(0, solar)
             if is_summer:
                 solar *= 1.4
