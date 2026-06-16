@@ -436,6 +436,20 @@ def get_combined_dataset(use_csv=False):
     except Exception as e:
         print(f'[LOADER] Gas prices not available: {e}')
 
+    # Real-time market data (Yahoo Finance)
+    try:
+        from collectors.market_data import fetch_market_data
+        market_df = fetch_market_data(days=90)
+        if market_df is not None and len(market_df) > 0:
+            market_cols = [c for c in market_df.columns if c not in ['date', 'fetch_time']]
+            merged = pd.merge(merged, market_df[['date'] + market_cols], on='date', how='left')
+            for c in market_cols:
+                if c in merged.columns:
+                    merged[c] = merged[c].ffill().bfill().fillna(0)
+            print(f'[LOADER] Market data integrated: {len(market_df)} days, {len(market_cols)} cols')
+    except Exception as e:
+        print(f'[LOADER] Market data not available: {e}')
+
     # ВДР-РДН spread
     try:
         idm_path = os.path.join(os.path.dirname(DATA_DIR), 'data', 'idm_prices.feather')
@@ -477,7 +491,7 @@ def get_combined_dataset(use_csv=False):
         merged = pd.merge(merged, ref_lag[['datetime', col_name]], on='datetime', how='left')
         merged[col_name] = merged[col_name].fillna(price_mean)
 
-    # === ROLLING STATISTICS (not shifted — consistent with predict.py computation) ===
+    # === ROLLING STATISTICS ===
     price_for_rolling = merged['price']
     for window in [24, 48, 168]:
         rolled = price_for_rolling.rolling(window, min_periods=1)
@@ -534,7 +548,7 @@ def get_combined_dataset(use_csv=False):
     merged['price_same_hour_yesterday'] = merged['price_same_hour_yesterday'].fillna(price_mean)
     merged['price_yoy_ratio'] = merged['price_same_hour_yesterday'] / merged['price_48h_ago'].clip(lower=1)
 
-    # === TECHNICAL INDICATORS (consistent with predict.py) ===
+    # === TECHNICAL INDICATORS ===
     # EMA
     merged['price_ema_6'] = merged['price'].ewm(span=6, adjust=False).mean()
     merged['price_ema_12'] = merged['price'].ewm(span=12, adjust=False).mean()

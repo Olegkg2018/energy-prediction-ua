@@ -87,6 +87,9 @@ FEATURE_COLS = [
     'spark_spread', 'spark_spread_lag7',
     # Market structure (2)
     'vrd_rdn_spread', 'vrd_rdn_ratio',
+    # Market data (Yahoo Finance) (8)
+    'ttf_gas_usd', 'ttf_gas_uah', 'brent_oil_usd', 'eur_uah', 'usd_uah',
+    'ttf_change_1d', 'ttf_change_7d', 'oil_change_7d',
 ]
 
 def train_quantile_models(data_df, force=False):
