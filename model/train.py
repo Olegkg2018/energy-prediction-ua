@@ -365,9 +365,14 @@ def predict_hourly(model, features_df):
 
     if isinstance(model, dict) and 'xgb' in model:
         pred_xgb = model['xgb'].predict(X)
-        w_xgb = model.get('weight_xgb', 0.6)
-        w_lstm = model.get('weight_lstm', 0.4)
+        w_xgb = model.get('xgb_weight', model.get('weight_xgb', 0.6))
 
+        if 'lgb' in model:
+            w_lgb = model.get('lgb_weight', 0.15)
+            pred_lgb = model['lgb'].predict(X)
+            return w_xgb * pred_xgb + (1 - w_xgb) * pred_lgb
+
+        w_lstm = model.get('weight_lstm', 0.4)
         if w_lstm > 0:
             from model.lstm import load_lstm, predict_lstm, LSTM_FEATURE_COLS
             lstm_model, lstm_scaler, _ = load_lstm()
