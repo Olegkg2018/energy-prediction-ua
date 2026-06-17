@@ -56,31 +56,15 @@ FEATURE_COLS = [
     'res_x_temp', 'total_gen_x_hour', 'wind_x_renewable',
     # Trend (1)
     'days_since_epoch',
-    # Extended price lags (9)
-    'price_lag_2h', 'price_lag_3h', 'price_lag_6h',
-    'price_lag_12h', 'price_lag_24h', 'price_lag_48h',
-    'price_lag_168h', 'price_lag_336h', 'price_lag_504h',
-    # Rolling statistics (17)
-    'price_rolling_mean_24h', 'price_rolling_std_24h',
-    'price_rolling_min_24h', 'price_rolling_max_24h',
-    'price_rolling_mean_48h', 'price_rolling_std_48h',
-    'price_rolling_min_48h', 'price_rolling_max_48h',
+    # Price lags — only 5 key lags (reduced from 9)
+    'price_lag_24h', 'price_lag_168h', 'price_lag_504h',
+    # Rolling stats — only 3 key stats (reduced from 17)
     'price_rolling_mean_168h', 'price_rolling_std_168h',
-    'price_rolling_min_168h', 'price_rolling_max_168h',
     'price_rolling_median_24h',
-    'price_rolling_skew_168h', 'price_rolling_kurt_168h',
-    'price_range_48h', 'price_range_168h',
-    # EWM (2)
-    'price_ewm_12h', 'price_ewm_48h',
-    # Price deltas (8)
-    'price_delta_1h', 'price_delta_3h', 'price_delta_6h', 'price_delta_24h',
+    # Deltas (4)
+    'price_delta_24h',
     'price_vs_yesterday', 'price_vs_last_week',
-    'price_same_hour_yesterday', 'price_yoy_ratio',
-    # Technical indicators (11)
-    'price_ema_6', 'price_ema_12', 'price_ema_24', 'price_ema_diff',
-    'price_bb_pctb_24', 'price_bb_pctb_48',
-    'price_momentum_24', 'price_momentum_48',
-    'price_roc_12', 'price_roc_24',
+    'price_same_hour_yesterday',
     # Gas & fuel (6)
     'ttf_eur_mwh', 'gas_uah_mwh',
     'gas_momentum_7d', 'gas_rolling_std_7d',
