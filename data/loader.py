@@ -419,6 +419,16 @@ def get_combined_dataset(use_csv=False):
     merged['solar_intensity'] = merged['solar_share'] * merged['sin_hour'].clip(lower=0)
     merged['is_solar_dip_hour'] = ((merged['hour'] >= 10) & (merged['hour'] <= 15)).astype(int)
 
+    # Weather anomaly features — how today differs from average for this hour
+    for col, window in [('solar_radiation', 168), ('wind_speed', 168), ('temperature', 168)]:
+        if col in merged.columns:
+            avg = merged.groupby('hour')[col].transform(lambda x: x.rolling(window, min_periods=1).mean())
+            std = merged.groupby('hour')[col].transform(lambda x: x.rolling(window, min_periods=1).std().clip(lower=1))
+            merged[f'{col}_anomaly'] = (merged[col] - avg) / std
+            merged[f'{col}_vs_avg'] = merged[col] - avg
+    merged['rad_x_wind'] = merged.get('solar_radiation', 0) * merged.get('wind_speed', 0)
+    merged['renewable_boost'] = merged.get('solar_radiation', 0) * merged.get('solar_share', 0) + merged.get('wind_speed', 0) * merged.get('wind_share', 0) * 100
+
     # Gas prices (TTF + НАФТОГАЗ)
     try:
         from collectors.gas_prices import get_gas_prices

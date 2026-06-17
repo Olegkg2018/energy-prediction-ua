@@ -255,6 +255,36 @@ def prepare_prediction_features(target_date):
     df['solar_x_hour'] = df['solar_radiation'] * df['hour']
     df['wind_x_hour'] = df['wind_index'] * df['hour']
 
+    # Weather anomaly features — compare forecast to historical average
+    try:
+        oree_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'oree_prices.feather')
+        hist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'historical_weather.feather')
+        if os.path.exists(hist_path):
+            hist = pd.read_feather(hist_path)
+            for col, window in [('solar_radiation', 168), ('wind_speed', 168), ('temperature', 168)]:
+                if col in hist.columns and col in df.columns:
+                    hist['hour'] = pd.to_datetime(hist['datetime']).dt.hour
+                    avg_by_hour = hist.groupby('hour')[col].mean()
+                    std_by_hour = hist.groupby('hour')[col].std().clip(lower=1)
+                    for idx in df.index:
+                        h = int(df.loc[idx, 'hour'])
+                        if h in avg_by_hour.index:
+                            mean_val = avg_by_hour[h]
+                            std_val = std_by_hour[h]
+                            actual_val = df.loc[idx, col]
+                            df.loc[idx, f'{col}_anomaly'] = (actual_val - mean_val) / std_val
+                            df.loc[idx, f'{col}_vs_avg'] = actual_val - mean_val
+                        else:
+                            df.loc[idx, f'{col}_anomaly'] = 0
+                            df.loc[idx, f'{col}_vs_avg'] = 0
+    except Exception:
+        for col in ['solar_radiation', 'wind_speed', 'temperature']:
+            df[f'{col}_anomaly'] = 0
+            df[f'{col}_vs_avg'] = 0
+
+    df['rad_x_wind'] = df.get('solar_radiation', 0) * df.get('wind_speed', 0)
+    df['renewable_boost'] = df.get('solar_radiation', 0) * df.get('solar_share', 0) + df.get('wind_speed', 0) * df.get('wind_share', 0) * 100
+
     # --- Gas prices for target date ---
     try:
         from collectors.gas_prices import get_gas_price_for_date

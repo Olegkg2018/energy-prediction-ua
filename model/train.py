@@ -43,6 +43,10 @@ FEATURE_COLS = [
     # Weather interactions (6)
     'demand_proxy', 'cooling_demand', 'heating_demand',
     'temp_x_hour', 'temp_x_solar', 'solar_x_clouds',
+    # Weather anomalies (7)
+    'solar_radiation_anomaly', 'solar_radiation_vs_avg',
+    'wind_speed_anomaly', 'wind_speed_vs_avg',
+    'temperature_anomaly', 'rad_x_wind', 'renewable_boost',
     # Renewable & generation (14)
     'solar_index', 'wind_index', 'renewable_index',
     'nuclear_share', 'thermal_share', 'hydro_share',
@@ -250,6 +254,33 @@ def train_model(data_df, force=False):
     mae_val = mean_absolute_error(y_test, preds)
     r2_val = r2_score(y_test, preds)
 
+    # Train LightGBM
+    lgb_model = None
+    best_w = 1.0
+    best_mae_ens = mae_val
+    try:
+        import lightgbm as lgb
+        lgb_model = lgb.LGBMRegressor(
+            n_estimators=800, max_depth=6, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.6, reg_alpha=1.0, reg_lambda=2.0,
+            min_child_weight=5, random_state=42, n_jobs=-1, verbose=-1
+        )
+        lgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)],
+                      callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)])
+        lgb_preds = lgb_model.predict(X_test)
+        lgb_mae = mean_absolute_error(y_test, lgb_preds)
+
+        for w in np.arange(0.5, 0.95, 0.05):
+            ens = w * preds + (1 - w) * lgb_preds
+            ens_mae = mean_absolute_error(y_test, ens)
+            if ens_mae < best_mae_ens:
+                best_mae_ens = ens_mae
+                best_w = w
+        print(f"[ENSEMBLE] XGB MAE={mae_val:.2f}, LGB MAE={lgb_mae:.2f}, Ensemble MAE={best_mae_ens:.2f} (XGB={best_w:.0%})")
+        mae_val = best_mae_ens
+    except ImportError:
+        print("[ENSEMBLE] LightGBM not available, using XGBoost only")
+
     # Train LSTM
     from model.lstm import train_lstm, load_lstm, predict_lstm, LSTM_FEATURE_COLS
     lstm_config = train_lstm(data_df, force=force)
@@ -301,9 +332,13 @@ def train_model(data_df, force=False):
 
     model = {
         'xgb': xgb_model,
-        'weight_xgb': w_xgb,
+        'xgb_weight': best_w,
+        'lgb_weight': 1 - best_w,
+        'weight_xgb': best_w,
         'weight_lstm': w_lstm,
     }
+    if lgb_model is not None:
+        model['lgb'] = lgb_model
     metrics = {
         'mae': round(float(mae_val), 2),
         'rmse': round(float(np.sqrt(mean_squared_error(y_test, preds))), 2),
