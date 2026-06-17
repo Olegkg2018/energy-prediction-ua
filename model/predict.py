@@ -66,14 +66,29 @@ def _compute_hour_specific_price_features(oree_lags, pred_date):
 
     oree_sorted = oree_lags.sort_values('datetime').copy()
     oree_sorted['hour'] = oree_sorted['datetime'].dt.hour
+    oree_sorted['dow'] = oree_sorted['datetime'].dt.dayofweek
     price_mean = oree_sorted['price'].mean()
 
     last_date = oree_lags['datetime'].max()
-    yesterday = last_date - pd.Timedelta(days=1)
-    yesterday_data = oree_sorted[oree_sorted['datetime'].dt.date == yesterday.date()]
+    last_date_data = oree_sorted[oree_sorted['datetime'].dt.date == last_date.date()]
     yesterday_lookup = {}
-    for _, row in yesterday_data.iterrows():
+    last_date_is_weekend = last_date.dayofweek >= 5
+    for _, row in last_date_data.iterrows():
         yesterday_lookup[int(row['datetime'].hour)] = float(row['price'])
+
+    target_dt = pd.Timestamp(pred_date)
+    target_is_weekend = target_dt.dayofweek >= 5
+    day_type_changed = last_date_is_weekend != target_is_weekend
+
+    same_dow_lookup = {}
+    if day_type_changed:
+        target_dow = target_dt.dayofweek
+        same_dow_dates = oree_sorted[oree_sorted['dow'] == target_dow]['datetime'].dt.date.unique()
+        if len(same_dow_dates) > 0:
+            last_same_dow = same_dow_dates[-1]
+            same_dow_data = oree_sorted[oree_sorted['datetime'].dt.date == last_same_dow]
+            for _, row in same_dow_data.iterrows():
+                same_dow_lookup[int(row['datetime'].hour)] = float(row['price'])
 
     hour_prices = {}
     for h in range(24):
@@ -82,7 +97,10 @@ def _compute_hour_specific_price_features(oree_lags, pred_date):
     for h in range(24):
         hp = hour_prices[h]
         nh = len(hp)
-        yest = yesterday_lookup.get(h, price_mean)
+        if day_type_changed and h in same_dow_lookup:
+            yest = same_dow_lookup[h]
+        else:
+            yest = yesterday_lookup.get(h, price_mean)
         result['price_same_hour_yesterday'][h] = yest
         if nh == 0:
             continue
@@ -318,6 +336,22 @@ def prepare_prediction_features(target_date):
                 df = pd.merge(df, merged_lags, on='datetime', how='left')
                 for col_name in lag_refs:
                     df[col_name] = df[col_name].fillna(price_mean)
+
+            # If day type changed (weekday↔weekend), override 24h lag with same DOW from last week
+            target_dt_check = pd.Timestamp(pred_date)
+            last_dow = oree_lags['datetime'].max().dayofweek
+            target_dow = target_dt_check.dayofweek
+            if (last_dow >= 5) != (target_dow >= 5) and 'price_lag_24h' in df.columns:
+                same_dow_lags = oree_lags.copy()
+                same_dow_lags['dow'] = same_dow_lags['datetime'].dt.dayofweek
+                same_dow_data = same_dow_lags[same_dow_lags['dow'] == target_dow].sort_values('datetime')
+                if len(same_dow_data) >= 24:
+                    same_dow_ref = same_dow_data.tail(24).copy()
+                    same_dow_ref['datetime'] = same_dow_ref['datetime'] + pd.Timedelta(days=7)
+                    same_dow_ref = same_dow_ref.rename(columns={'price': 'price_lag_24h'})
+                    df = df.drop(columns=['price_lag_24h'], errors='ignore')
+                    df = pd.merge(df, same_dow_ref[['datetime', 'price_lag_24h']], on='datetime', how='left')
+                    df['price_lag_24h'] = df['price_lag_24h'].fillna(price_mean)
 
             # Hour-specific rolling/technical features
             hour_features = _compute_hour_specific_price_features(oree_lags, pred_date)
