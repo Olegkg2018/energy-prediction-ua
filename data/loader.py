@@ -332,6 +332,12 @@ def get_combined_dataset(use_csv=False):
         return _cache
     if os.path.exists(CACHE_FILE):
         try:
+            return pd.read_feather(CACHE_FILE)
+        except Exception:
+            pass
+
+    if os.path.exists(CACHE_FILE):
+        try:
             _cache = pd.read_feather(CACHE_FILE)
             return _cache
         except Exception:
@@ -491,7 +497,7 @@ def get_combined_dataset(use_csv=False):
     ref = merged[['datetime', 'price']].copy()
     price_mean = merged['price'].mean()
     for lag_hours, col_name in [
-        (2, 'price_lag_2h'), (3, 'price_lag_3h'), (6, 'price_lag_6h'),
+        (1, 'price_lag_1h'), (2, 'price_lag_2h'), (3, 'price_lag_3h'), (6, 'price_lag_6h'),
         (12, 'price_lag_12h'), (24, 'price_lag_24h'), (48, 'price_lag_48h'),
         (168, 'price_lag_168h'), (336, 'price_lag_336h'), (504, 'price_lag_504h'),
     ]:
@@ -518,6 +524,10 @@ def get_combined_dataset(use_csv=False):
     # EWM
     merged['price_ewm_12h'] = price_for_rolling.ewm(span=12, adjust=False).mean()
     merged['price_ewm_48h'] = price_for_rolling.ewm(span=48, adjust=False).mean()
+
+    # MA terms (ARIMA moving average component)
+    merged['price_ma_24h'] = price_for_rolling.rolling(24, min_periods=1).mean()
+    merged['price_ma_168h'] = price_for_rolling.rolling(168, min_periods=1).mean()
 
     # Price deltas (use lag-to-lag differences to exclude current price)
     merged['price_delta_1h'] = merged['price'].diff(1).fillna(0)
@@ -589,6 +599,22 @@ def get_combined_dataset(use_csv=False):
         if 'ttf_eur_mwh' in merged.columns:
             merged['spark_spread'] = merged['price_lag_24h'] - merged['ttf_eur_mwh'] * 0.4
             merged['spark_spread_lag7'] = merged['spark_spread'].shift(7).fillna(merged['spark_spread'].mean())
+
+    # Seasonal features (ARIMA seasonal component)
+    try:
+        from model.seasonality import build_seasonal_profiles, compute_seasonal_features
+        oree = load_oree_prices()
+        if oree is not None and len(oree) > 100:
+            build_seasonal_profiles(oree)
+        if 'dayofweek' not in merged.columns:
+            merged['dayofweek'] = pd.to_datetime(merged['date']).dt.dayofweek
+        merged = compute_seasonal_features(merged)
+        print(f'[LOADER] Seasonal features integrated')
+    except Exception as e:
+        print(f'[LOADER] Seasonal features error: {e}')
+        merged['hourly_seasonal'] = 0
+        merged['weekly_seasonal'] = 0
+        merged['price_residual'] = 0
 
     try:
         os.makedirs(DATA_DIR, exist_ok=True)

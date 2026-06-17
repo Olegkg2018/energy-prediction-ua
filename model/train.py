@@ -60,12 +60,16 @@ FEATURE_COLS = [
     'res_x_temp', 'total_gen_x_hour', 'wind_x_renewable',
     # Trend (1)
     'days_since_epoch',
-    # Price lags — only 5 key lags (reduced from 9)
+    # Price lags — AR terms (ACF: lag1h=0.87, lag24h=0.85, lag168h=0.75)
+    'price_lag_1h', 'price_lag_2h', 'price_lag_3h',
     'price_lag_24h', 'price_lag_168h', 'price_lag_504h',
-    # Rolling stats — only 3 key stats (reduced from 17)
-    'price_rolling_mean_168h', 'price_rolling_std_168h',
+    # Rolling stats + MA terms (ARIMA MA component)
+    'price_ma_24h', 'price_ma_168h',
+    'price_rolling_std_168h',
     'price_rolling_median_24h',
-    # Deltas (4)
+    # Seasonal features
+    'hourly_seasonal', 'weekly_seasonal', 'price_residual',
+    # Deltas
     'price_delta_24h',
     'price_vs_yesterday', 'price_vs_last_week',
     'price_same_hour_yesterday',

@@ -347,7 +347,7 @@ def prepare_prediction_features(target_date):
             # Extended price lags
             lag_refs = {}
             for lag_hours, col_name in [
-                (2, 'price_lag_2h'), (3, 'price_lag_3h'), (6, 'price_lag_6h'),
+                (1, 'price_lag_1h'), (2, 'price_lag_2h'), (3, 'price_lag_3h'), (6, 'price_lag_6h'),
                 (12, 'price_lag_12h'), (24, 'price_lag_24h'), (48, 'price_lag_48h'),
                 (168, 'price_lag_168h'), (336, 'price_lag_336h'), (504, 'price_lag_504h'),
             ]:
@@ -396,6 +396,23 @@ def prepare_prediction_features(target_date):
             if 'ttf_eur_mwh' in df.columns:
                 df['spark_spread'] = df.get('price_lag_24h', 0) - df['ttf_eur_mwh'] * 0.4
                 df['spark_spread_lag7'] = df.get('spark_spread', 0)
+
+            # MA terms (ARIMA moving average)
+            if 'price_lag_1h' in df.columns:
+                df['price_ma_24h'] = df['price_same_hour_yesterday']
+                df['price_ma_168h'] = df['price_same_hour_yesterday']
+
+            # Seasonal features from profiles
+            try:
+                from model.seasonality import load_profiles, compute_seasonal_features
+                target_dt_s = pd.Timestamp(pred_date)
+                df['dayofweek'] = target_dt_s.dayofweek
+                df['month'] = target_dt_s.month
+                df = compute_seasonal_features(df)
+            except Exception:
+                df['hourly_seasonal'] = 0
+                df['weekly_seasonal'] = 0
+                df['price_residual'] = 0
         else:
             for c in ['price_lag_2h', 'price_lag_3h', 'price_lag_6h', 'price_lag_12h',
                        'price_lag_24h', 'price_lag_48h', 'price_lag_168h', 'price_lag_336h', 'price_lag_504h']:
