@@ -233,7 +233,8 @@ def update_oree_prices():
         last_date = last_dt.date()
         today_date = today.date()
         yesterday_date = today_date - timedelta(days=1)
-        if last_date < yesterday_date:
+        latest_day_hours = len(existing[pd.to_datetime(existing['datetime']).dt.date == last_date])
+        if last_date < yesterday_date or latest_day_hours < 20:
             current_month = pd.Timestamp(today.year, today.month, 1).to_period('M')
             existing_months.discard(current_month)
 
