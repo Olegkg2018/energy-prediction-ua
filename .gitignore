@@ -11,3 +11,5 @@ model/__pycache__/
 *.log
 *.egg-info/
 .DS_Store
+data/retrain_log.jsonl
+.mimocode/

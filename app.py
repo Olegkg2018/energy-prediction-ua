@@ -114,10 +114,15 @@ def predict_page():
 @app.route('/api/predict')
 def api_predict():
     target_date = request.args.get('date', (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'))
-    results = predict_next_day_prices(target_date=target_date)
-    if results is None:
-        return jsonify({'success': False, 'error': 'Модель не навчена або немає прогнозу погоди'})
-    return jsonify({'success': True, 'predictions': results, 'date': target_date})
+    try:
+        results = predict_next_day_prices(target_date=target_date)
+        if results is None:
+            return jsonify({'success': False, 'error': 'Модель не навчена або немає прогнозу погоди'})
+        return jsonify({'success': True, 'predictions': results, 'date': target_date})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': f'Помилка прогнозу: {str(e)}'})
 
 @app.route('/api/predict_multi')
 def api_predict_multi():

@@ -6,6 +6,8 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import xgboost as xgb
 
+EXTREME_HOUR_WEIGHT = 3.0
+
 MODEL_DIR = os.path.join(os.path.dirname(__file__))
 MODEL_PATH = os.path.join(MODEL_DIR, 'model.pkl')
 MODEL_CONFIG_PATH = os.path.join(MODEL_DIR, 'model_config.json')
@@ -68,7 +70,7 @@ FEATURE_COLS = [
     'price_rolling_std_168h',
     'price_rolling_median_24h',
     # Seasonal features
-    'hourly_seasonal', 'weekly_seasonal', 'price_residual',
+    'hourly_seasonal', 'weekly_seasonal',
     # Deltas
     'price_delta_24h',
     'price_vs_yesterday', 'price_vs_last_week',
@@ -81,7 +83,7 @@ FEATURE_COLS = [
 ]
 
 def train_quantile_models(data_df, force=False):
-    """Train XGBoost quantile regression (P10, P50, P90) for midday solar dip hours."""
+    """Train XGBoost quantile regression (P10, P50, P90) for daytime and evening hours (9-23)."""
     models = {}
     for quantile, path in [(0.10, QUANTILE_P10_PATH), (0.50, QUANTILE_P50_PATH), (0.90, QUANTILE_P90_PATH)]:
         if os.path.exists(path) and not force:
@@ -101,17 +103,24 @@ def train_quantile_models(data_df, force=False):
 
     available = [c for c in FEATURE_COLS if c in data_df.columns]
     df = data_df.dropna(subset=['price'] + available).copy()
-    df = df[df['hour'].between(9, 19)]
+    df = df[df['hour'].between(9, 23)]
     if len(df) < 500:
         return None
 
+    # Mark extreme hours: solar dip (10-16) and evening peak (19-23)
+    df['is_extreme'] = ((df['hour'] >= 10) & (df['hour'] <= 16)) | ((df['hour'] >= 19) & (df['hour'] <= 23))
+    # Weight extreme hours higher to focus model on buy/sell windows
+    df['weight'] = np.where(df['is_extreme'], EXTREME_HOUR_WEIGHT, 1.0)
+
     X = df[available].values
     y = df['price'].values
+    weights = df['weight'].values
 
     # TEMPORAL split: train on first 85%, test on last 15% (no shuffle = no future leak)
     split_idx = int(len(X) * 0.85)
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
+    w_train, w_test = weights[:split_idx], weights[split_idx:]
 
     quantiles = [0.10, 0.50, 0.90]
     for quantile in quantiles:
@@ -129,10 +138,16 @@ def train_quantile_models(data_df, force=False):
             random_state=42,
             n_jobs=-1
         )
-        model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+        model.fit(
+            X_train,
+            y_train,
+            sample_weight=w_train,
+            eval_set=[(X_test, y_test)],
+            verbose=False,
+        )
         
         pred_q = model.predict(X_test)
-        mae_q = mean_absolute_error(y_test, pred_q)
+        mae_q = mean_absolute_error(y_test, pred_q, sample_weight=w_test)
         
         path = {0.10: QUANTILE_P10_PATH, 0.50: QUANTILE_P50_PATH, 0.90: QUANTILE_P90_PATH}[quantile]
         joblib.dump(model, path)
@@ -143,14 +158,14 @@ def train_quantile_models(data_df, force=False):
     import json
     with open(QUANTILE_CONFIG_PATH, 'w') as f:
         json.dump({
-            'mae_p10': round(float(mean_absolute_error(y_test, models[0.10].predict(X_test))), 2),
-            'mae_p50': round(float(mean_absolute_error(y_test, models[0.50].predict(X_test))), 2),
-            'mae_p90': round(float(mean_absolute_error(y_test, models[0.90].predict(X_test))), 2),
+            'mae_p10': round(float(mean_absolute_error(y_test, models[0.10].predict(X_test), sample_weight=w_test)), 2),
+            'mae_p50': round(float(mean_absolute_error(y_test, models[0.50].predict(X_test), sample_weight=w_test)), 2),
+            'mae_p90': round(float(mean_absolute_error(y_test, models[0.90].predict(X_test), sample_weight=w_test)), 2),
             'n_train': int(len(X_train)),
             'n_test': int(len(X_test)),
             'feature_cols': available,
             'quantiles': [0.10, 0.50, 0.90],
-            'hours': '9-19',
+            'hours': '9-23',
         }, f)
 
     return models
@@ -232,13 +247,20 @@ def train_model(data_df, force=False):
     if len(df) < 1000:
         return None, None
 
+    # Mark extreme hours: solar dip (10-16) and evening peak (19-23)
+    df['is_extreme'] = ((df['hour'] >= 10) & (df['hour'] <= 16)) | ((df['hour'] >= 19) & (df['hour'] <= 23))
+    # Weight extreme hours higher to focus model on buy/sell windows
+    df['weight'] = np.where(df['is_extreme'], EXTREME_HOUR_WEIGHT, 1.0)
+
     X = df[available].values
     y = df['price'].values
+    weights = df['weight'].values
 
     # TEMPORAL split: train on first 85%, test on last 15% (no shuffle = no future leak)
     split_idx = int(len(X) * 0.85)
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
+    w_train, w_test = weights[:split_idx], weights[split_idx:]
 
     xgb_model = xgb.XGBRegressor(
         n_estimators=800,
@@ -252,10 +274,16 @@ def train_model(data_df, force=False):
         random_state=42,
         n_jobs=-1
     )
-    xgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+    xgb_model.fit(
+        X_train,
+        y_train,
+        sample_weight=w_train,
+        eval_set=[(X_test, y_test)],
+        verbose=False,
+    )
 
     preds = xgb_model.predict(X_test)
-    mae_val = mean_absolute_error(y_test, preds)
+    mae_val = mean_absolute_error(y_test, preds, sample_weight=w_test)
     r2_val = r2_score(y_test, preds)
 
     # Train LightGBM
@@ -269,14 +297,20 @@ def train_model(data_df, force=False):
             subsample=0.8, colsample_bytree=0.6, reg_alpha=1.0, reg_lambda=2.0,
             min_child_weight=5, random_state=42, n_jobs=-1, verbose=-1
         )
-        lgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)],
-                      callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)])
+        lgb_model.fit(
+            X_train,
+            y_train,
+            sample_weight=w_train,
+            eval_set=[(X_test, y_test)],
+            eval_sample_weight=[w_test],
+            callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)],
+        )
         lgb_preds = lgb_model.predict(X_test)
-        lgb_mae = mean_absolute_error(y_test, lgb_preds)
+        lgb_mae = mean_absolute_error(y_test, lgb_preds, sample_weight=w_test)
 
         for w in np.arange(0.5, 0.95, 0.05):
             ens = w * preds + (1 - w) * lgb_preds
-            ens_mae = mean_absolute_error(y_test, ens)
+            ens_mae = mean_absolute_error(y_test, ens, sample_weight=w_test)
             if ens_mae < best_mae_ens:
                 best_mae_ens = ens_mae
                 best_w = w
@@ -314,13 +348,13 @@ def train_model(data_df, force=False):
             best_w = (1.0, 0.0)
             for w in np.arange(0.3, 0.9, 0.05):
                 ensemble_pred = w * preds + (1 - w) * np.array(lstm_preds_all)
-                ens_mae = mean_absolute_error(y_test, ensemble_pred)
+                ens_mae = mean_absolute_error(y_test, ensemble_pred, sample_weight=w_test)
                 if ens_mae < best_mae:
                     best_mae = ens_mae
                     best_w = (w, 1 - w)
             w_xgb, w_lstm = best_w
             ensemble_pred = w_xgb * preds + w_lstm * np.array(lstm_preds_all)
-            mae_val = mean_absolute_error(y_test, ensemble_pred)
+            mae_val = mean_absolute_error(y_test, ensemble_pred, sample_weight=w_test)
             r2_val = r2_score(y_test, ensemble_pred)
             print(f"[ENSEMBLE] Optimal weights: XGB={w_xgb:.2f}, LSTM={w_lstm:.2f}, MAE={mae_val:.2f}")
 
@@ -330,7 +364,7 @@ def train_model(data_df, force=False):
                     'w_xgb': round(float(w_xgb), 3),
                     'w_lstm': round(float(w_lstm), 3),
                     'mae_ensemble': round(float(mae_val), 2),
-                    'mae_xgb_only': round(float(mean_absolute_error(y_test, preds)), 2),
+                    'mae_xgb_only': round(float(mean_absolute_error(y_test, preds, sample_weight=w_test)), 2),
                     'lstm_mae': lstm_config.get('mae', None) if lstm_config else None,
                 }, f)
 
@@ -402,6 +436,7 @@ def predict_hourly(model, features_df):
         features_df[c] = 0
     X = features_df[feature_cols].values
 
+    # Compute base prediction from the model
     if isinstance(model, dict) and 'xgb' in model:
         pred_xgb = model['xgb'].predict(X)
         w_xgb = model.get('xgb_weight', model.get('weight_xgb', 0.6))
@@ -409,18 +444,23 @@ def predict_hourly(model, features_df):
         if 'lgb' in model:
             w_lgb = model.get('lgb_weight', 0.15)
             pred_lgb = model['lgb'].predict(X)
-            return w_xgb * pred_xgb + (1 - w_xgb) * pred_lgb
-
-        w_lstm = model.get('weight_lstm', 0.4)
-        if w_lstm > 0:
+            base_prediction = w_xgb * pred_xgb + (1 - w_xgb) * pred_lgb
+        elif model.get('weight_lstm', 0) > 0:
+            w_lstm = model.get('weight_lstm', 0.4)
             from model.lstm import load_lstm, predict_lstm, LSTM_FEATURE_COLS
             lstm_model, lstm_scaler, _ = load_lstm()
             if lstm_model is not None:
                 lstm_features = [c for c in LSTM_FEATURE_COLS if c in features_df.columns]
                 lstm_preds = predict_lstm(lstm_model, lstm_scaler, features_df, lstm_features)
                 if lstm_preds is not None and len(lstm_preds) >= len(pred_xgb):
-                    return w_xgb * pred_xgb + w_lstm * lstm_preds[:len(pred_xgb)]
+                    base_prediction = w_xgb * pred_xgb + w_lstm * lstm_preds[:len(pred_xgb)]
+                else:
+                    base_prediction = pred_xgb
+            else:
+                base_prediction = pred_xgb
+        else:
+            base_prediction = pred_xgb
+    else:
+        base_prediction = model.predict(X)
 
-        return pred_xgb
-
-    return model.predict(X)
+    return base_prediction

@@ -6,6 +6,8 @@ from model.train import load_model, predict_hourly, load_metrics, load_quantile_
 from collectors.generation_mix import get_generation_mix
 
 _FEATURE_CACHE = None
+_TRADE_BIAS_CACHE = {}
+_DAILY_RESIDUAL_CACHE = {}
 
 def _get_real_weather_for_target(target_date):
     """Try to get real weather forecast for target date from OpenWeather API."""
@@ -413,6 +415,9 @@ def prepare_prediction_features(target_date):
                 df['hourly_seasonal'] = 0
                 df['weekly_seasonal'] = 0
                 df['price_residual'] = 0
+
+            # price_residual is computed at prediction time using lagged data
+            # (was 0 during prediction = data leakage from training)
         else:
             for c in ['price_lag_2h', 'price_lag_3h', 'price_lag_6h', 'price_lag_12h',
                        'price_lag_24h', 'price_lag_48h', 'price_lag_168h', 'price_lag_336h', 'price_lag_504h']:
@@ -446,6 +451,105 @@ def _get_quantile_predictions(features, midday_mask):
     p90 = qm.get(0.90).predict(midday_features[available_q].values) if 0.90 in qm else None
     return p10, p50, p90
 
+
+def _compute_hourly_trade_bias(model, target_date):
+    """Estimate per-hour residual bias from recent history before target_date."""
+    cache_key = str(target_date)
+    if cache_key in _TRADE_BIAS_CACHE:
+        return _TRADE_BIAS_CACHE[cache_key]
+
+    oree_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'oree_prices.feather')
+    if not os.path.exists(oree_path):
+        _TRADE_BIAS_CACHE[cache_key] = {}
+        return {}
+
+    try:
+        oree = pd.read_feather(oree_path)[['datetime', 'date', 'hour', 'price']].copy()
+        oree['date'] = pd.to_datetime(oree['date']).dt.normalize()
+        target_dt = pd.Timestamp(target_date).normalize()
+
+        solar_hours = list(range(10, 17))
+        evening_hours = [19, 20, 21, 22, 23]
+
+        # Longer lookback for solar dip, shorter for volatile evening peaks.
+        solar_dates = sorted([d for d in oree['date'].unique() if d < target_dt])[-30:]
+        evening_dates = sorted([d for d in oree['date'].unique() if d < target_dt])[-7:]
+
+        def day_residual_map(day_ts):
+            day_key = pd.Timestamp(day_ts).strftime('%Y-%m-%d')
+            if day_key in _DAILY_RESIDUAL_CACHE:
+                return _DAILY_RESIDUAL_CACHE[day_key]
+
+            features = prepare_prediction_features(day_key)
+            if features is None or len(features) == 0:
+                _DAILY_RESIDUAL_CACHE[day_key] = {}
+                return {}
+
+            preds = predict_hourly(model, features)
+            if preds is None or len(preds) == 0:
+                _DAILY_RESIDUAL_CACHE[day_key] = {}
+                return {}
+
+            pred_df = pd.DataFrame({
+                'hour': features['hour'].astype(int).values,
+                'pred': np.asarray(preds, dtype=float),
+            })
+            actual_df = oree[oree['date'] == pd.Timestamp(day_ts)][['hour', 'price']].rename(columns={'price': 'actual'})
+            merged = pd.merge(actual_df, pred_df, on='hour', how='inner')
+            if merged.empty:
+                _DAILY_RESIDUAL_CACHE[day_key] = {}
+                return {}
+
+            merged['residual'] = merged['actual'] - merged['pred']
+            res_map = {int(r['hour']): float(r['residual']) for _, r in merged[['hour', 'residual']].iterrows()}
+            _DAILY_RESIDUAL_CACHE[day_key] = res_map
+            return res_map
+
+        solar_res = {h: [] for h in solar_hours}
+        for d in solar_dates:
+            res_map = day_residual_map(d)
+            for h in solar_hours:
+                if h in res_map:
+                    solar_res[h].append(res_map[h])
+
+        evening_res = {h: [] for h in evening_hours}
+        for d in evening_dates:
+            res_map = day_residual_map(d)
+            for h in evening_hours:
+                if h in res_map:
+                    evening_res[h].append(res_map[h])
+
+        bias = {}
+        for h in solar_hours:
+            vals = solar_res.get(h, [])
+            if len(vals) >= 5:
+                # Stronger cap for solar dip hours where overprediction can be extreme.
+                bias[h] = float(np.clip(np.median(vals), -2500, 2500))
+
+        for h in evening_hours:
+            vals = evening_res.get(h, [])
+            if len(vals) >= 5:
+                # Evening residuals are less stable; use tighter clipping.
+                bias[h] = float(np.clip(np.median(vals), -1200, 1200))
+
+        _TRADE_BIAS_CACHE[cache_key] = bias
+        return bias
+    except Exception:
+        _TRADE_BIAS_CACHE[cache_key] = {}
+        return {}
+
+
+def _apply_trade_bias_correction(features, predictions, hourly_bias):
+    if predictions is None or len(predictions) == 0 or not hourly_bias:
+        return predictions
+
+    corrected = np.asarray(predictions, dtype=float).copy()
+    hours = features['hour'].astype(int).values
+    for i, h in enumerate(hours):
+        if h in hourly_bias:
+            corrected[i] += hourly_bias[h]
+    return corrected
+
 def _build_results(features, predictions, p10_all=None, p50_all=None, p90_all=None, midday_mask=None):
     results = []
     q_idx = 0
@@ -475,19 +579,33 @@ def predict_next_day_prices(target_date=None):
     if target_date is None:
         target_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
 
-    model = load_model()
-    if model is None:
+    try:
+        model = load_model()
+        if model is None:
+            print("[PREDICT] Model not loaded")
+            return None
+
+        features = prepare_prediction_features(target_date)
+        if features is None:
+            print(f"[PREDICT] Features not available for {target_date}")
+            return None
+
+        predictions = predict_hourly(model, features)
+        if predictions is None:
+            print("[PREDICT] predict_hourly returned None")
+            return None
+
+        hourly_bias = _compute_hourly_trade_bias(model, target_date)
+        predictions = _apply_trade_bias_correction(features, predictions, hourly_bias)
+        midday_mask = features['hour'].between(9, 23)
+        p10, p50, p90 = _get_quantile_predictions(features, midday_mask)
+
+        return _build_results(features, predictions, p10, p50, p90, midday_mask)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[PREDICT] Error for {target_date}: {e}")
         return None
-
-    features = prepare_prediction_features(target_date)
-    if features is None:
-        return None
-
-    predictions = predict_hourly(model, features)
-    midday_mask = features['hour'].between(9, 19)
-    p10, p50, p90 = _get_quantile_predictions(features, midday_mask)
-
-    return _build_results(features, predictions, p10, p50, p90, midday_mask)
 
 def predict_with_dates(dates):
     model = load_model()
@@ -501,7 +619,9 @@ def predict_with_dates(dates):
             all_predictions[target_date] = []
             continue
         preds = predict_hourly(model, features)
-        midday_mask = features['hour'].between(9, 19)
+        hourly_bias = _compute_hourly_trade_bias(model, target_date)
+        preds = _apply_trade_bias_correction(features, preds, hourly_bias)
+        midday_mask = features['hour'].between(9, 23)
         p10, p50, p90 = _get_quantile_predictions(features, midday_mask)
         all_predictions[target_date] = _build_results(features, preds, p10, p50, p90, midday_mask)
     return all_predictions
